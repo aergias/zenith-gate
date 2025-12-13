@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_V4_FINAL';
+  protocol: 'ZENITH_GATE_STABLE_V5';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -24,6 +24,7 @@ class SyncService {
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
+    console.log(`[SyncService] Link: ${newStatus}`);
     if (this.onStatusChange) this.onStatusChange(newStatus);
   }
 
@@ -31,7 +32,10 @@ class SyncService {
 
   subscribe(matchId: string, callback: StateCallback, statusCallback?: StatusCallback) {
     this.onUpdate = callback;
-    if (statusCallback) this.onStatusChange = statusCallback;
+    if (statusCallback) {
+      this.onStatusChange = statusCallback;
+      statusCallback(this.status);
+    }
 
     if (this.socket && this.socket.readyState === WebSocket.OPEN && this.matchId === matchId) {
       this.setStatus('connected');
@@ -43,11 +47,14 @@ class SyncService {
   }
 
   connect() {
-    if (this.socket) this.socket.close();
+    if (this.socket) {
+      this.socket.onclose = null;
+      this.socket.close();
+    }
 
     this.setStatus('connecting');
-    // Using a reliable public relay endpoint
-    const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
+    // Using a reliable public relay with a specific app prefix
+    const relayUrl = `wss://socketsbay.com/wss/v2/1/zenith_gate_relay/`;
     
     try {
       this.socket = new WebSocket(relayUrl);
@@ -62,7 +69,7 @@ class SyncService {
           const msg: SyncMessage = JSON.parse(event.data);
           if (
             msg && 
-            msg.protocol === 'ZENITH_V4_FINAL' && 
+            msg.protocol === 'ZENITH_GATE_STABLE_V5' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
@@ -74,7 +81,7 @@ class SyncService {
       this.socket.onerror = () => this.setStatus('error');
       this.socket.onclose = () => {
         if (this.status !== 'disconnected') {
-          setTimeout(() => this.connect(), 3000);
+          setTimeout(() => this.connect(), 2000);
         }
       };
     } catch (err) {
@@ -82,11 +89,11 @@ class SyncService {
     }
   }
 
-  startHeartbeat() {
+  private startHeartbeat() {
     if (this.heartbeatInterval) window.clearInterval(this.heartbeatInterval);
     this.heartbeatInterval = window.setInterval(() => {
       if (this.socket?.readyState === WebSocket.OPEN) {
-        this.send('KEEP_ALIVE', {});
+        this.send('HEARTBEAT', { t: Date.now() });
       }
     }, 10000);
   }
@@ -100,7 +107,7 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_V4_FINAL'
+      protocol: 'ZENITH_GATE_STABLE_V5'
     };
 
     try {

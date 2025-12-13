@@ -60,18 +60,22 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [gameState.phase]);
 
+  // Socket Message Router
   useEffect(() => {
     syncUpdateRef.current = (type: string, data: any) => {
       switch (type) {
-        case 'HANDSHAKE':
+        case 'DISCOVERY':
           setGameState(prev => ({ 
             ...prev, 
             remoteUsername: data.username, 
             isHost: syncService.getClientId() < data.clientId 
           }));
-          syncService.send('HANDSHAKE_REPLY', { username: localUsernameRef.current, clientId: syncService.getClientId() });
+          syncService.send('DISCOVERY_REPLY', { 
+            username: localUsernameRef.current, 
+            clientId: syncService.getClientId() 
+          });
           break;
-        case 'HANDSHAKE_REPLY':
+        case 'DISCOVERY_REPLY':
           setGameState(prev => ({ 
             ...prev, 
             remoteUsername: data.username,
@@ -92,6 +96,7 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // Sync Connection & Discovery Pulse
   useEffect(() => {
     if (gameState.matchId && (gameState.phase === 'lobby' || gameState.phase === 'prep')) {
       syncService.subscribe(
@@ -100,9 +105,13 @@ const App: React.FC = () => {
         (status) => setConnStatus(status)
       );
 
+      // Discovery Pulse: Keep announcing presence until rival is found
       const interval = window.setInterval(() => {
         if (syncService.getStatus() === 'connected' && !gameState.remoteUsername) {
-          syncService.send('HANDSHAKE', { username: localUsernameRef.current, clientId: syncService.getClientId() });
+          syncService.send('DISCOVERY', { 
+            username: localUsernameRef.current, 
+            clientId: syncService.getClientId() 
+          });
         }
       }, 1500);
 
@@ -198,11 +207,11 @@ const App: React.FC = () => {
   }, []);
 
   return (
-    <div className="relative w-full h-screen bg-slate-950 overflow-hidden flex flex-col items-center">
+    <div className="relative w-full h-full bg-slate-950 overflow-hidden flex flex-col">
       {gameState.phase === 'selection' && (
-        <div className="flex-1 flex flex-col items-center justify-center gap-6 animate-fade-in w-full max-w-4xl p-6">
+        <div className="flex-1 flex flex-col items-center justify-center gap-6 animate-fade-in w-full max-w-4xl p-6 mx-auto">
           <div className="text-center space-y-2">
-            <h1 className="text-7xl font-black text-white italic">ZENITH GATE</h1>
+            <h1 className="text-7xl font-black text-white italic tracking-tighter">ZENITH GATE</h1>
             <p className="text-blue-400 font-mono text-[10px] tracking-[0.6em]">Arena of the Infinite</p>
           </div>
           <div className="bg-slate-900/50 p-8 rounded-[32px] border border-slate-700 w-full flex flex-col gap-6 shadow-2xl">
@@ -233,64 +242,72 @@ const App: React.FC = () => {
       )}
 
       {gameState.phase === 'lobby' && (
-        <div className="flex-1 flex flex-col items-center justify-center gap-12 animate-fade-in w-full max-w-4xl p-6">
+        <div className="flex-1 flex flex-col items-center justify-center gap-12 animate-fade-in w-full max-w-4xl p-6 mx-auto">
            <div className="bg-slate-900/50 p-16 rounded-[40px] border border-slate-700 shadow-2xl w-full flex flex-col items-center gap-10">
              <div className="text-center">
-                <div className="flex items-center gap-2 mb-4 justify-center">
-                   <div className={`w-3 h-3 rounded-full ${connStatus === 'connected' ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`} />
-                   <span className="text-[10px] font-black text-white uppercase tracking-widest">{connStatus === 'connected' ? 'GATE SYNCHRONIZED' : 'SEARCHING FOR SIGNAL...'}</span>
+                <div className="flex items-center gap-3 mb-4 justify-center">
+                   <div className={`w-3 h-3 rounded-full ${connStatus === 'connected' ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-red-500 animate-pulse'}`} />
+                   <span className={`text-[10px] font-black uppercase tracking-widest ${connStatus === 'connected' ? 'text-green-400' : 'text-red-400'}`}>
+                     {connStatus === 'connected' ? 'Gate Synchronized' : 'Searching for Signal...'}
+                   </span>
                 </div>
-                <div className="text-7xl font-black text-white font-mono bg-slate-950 px-10 py-6 rounded-3xl border-2 border-slate-800 tracking-[0.2em]">{gameState.matchId}</div>
-                <button onClick={copyInviteLink} className={`mt-6 px-8 py-3 rounded-full text-[10px] font-black uppercase ${copied ? 'bg-green-600' : 'bg-slate-800'} text-white`}>
-                  {copied ? 'Copied!' : 'Copy Warp Link'}
+                <div className="text-7xl font-black text-white font-mono bg-slate-950 px-10 py-6 rounded-3xl border-2 border-slate-800 tracking-[0.2em] shadow-inner">{gameState.matchId}</div>
+                <button onClick={copyInviteLink} className={`mt-6 px-8 py-3 rounded-full text-[10px] font-black uppercase transition-all ${copied ? 'bg-green-600' : 'bg-slate-800 hover:bg-slate-700'} text-white`}>
+                  <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'} mr-2`}></i>
+                  {copied ? 'Link Copied' : 'Copy Warp Link'}
                 </button>
              </div>
              <div className="flex items-center gap-12 w-full justify-center">
                 <div className="text-center"><div className="w-24 h-24 bg-blue-600/20 border-2 border-blue-500 rounded-full flex items-center justify-center text-4xl text-blue-400"><i className="fa-solid fa-user"></i></div><span className="text-white font-black uppercase text-sm mt-4 block">{gameState.localUsername}</span></div>
                 <div className="text-slate-600 text-3xl"><i className="fa-solid fa-circle-nodes"></i></div>
-                <div className="text-center"><div className={`w-24 h-24 rounded-full border-2 flex items-center justify-center text-4xl ${gameState.remoteUsername ? 'bg-purple-600/20 border-purple-500 text-purple-400' : 'bg-slate-800 border-slate-700 text-slate-600 border-dashed animate-pulse'}`}><i className="fa-solid fa-user-plus"></i></div><span className="text-white font-black uppercase text-sm mt-4 block">{gameState.remoteUsername || 'Seeking Rival...'}</span></div>
+                <div className="text-center"><div className={`w-24 h-24 rounded-full border-2 flex items-center justify-center text-4xl transition-all ${gameState.remoteUsername ? 'bg-purple-600/20 border-purple-500 text-purple-400' : 'bg-slate-800 border-slate-700 text-slate-600 border-dashed animate-pulse'}`}><i className={`fa-solid ${gameState.remoteUsername ? 'fa-user-check' : 'fa-user-plus'}`}></i></div><span className="text-white font-black uppercase text-sm mt-4 block">{gameState.remoteUsername || 'Seeking Rival...'}</span></div>
              </div>
-             {gameState.remoteUsername && (
-               <button onClick={() => setGameState(prev => ({ ...prev, phase: 'prep' }))} className="px-12 py-5 bg-blue-600 hover:bg-blue-500 text-white font-black uppercase rounded-2xl">Initialize Prep Sector</button>
+             {gameState.remoteUsername ? (
+               <button onClick={() => setGameState(prev => ({ ...prev, phase: 'prep' }))} className="px-12 py-5 bg-blue-600 hover:bg-blue-500 text-white font-black uppercase rounded-2xl shadow-lg transition-transform hover:scale-105">Initialize Prep Sector</button>
+             ) : (
+                <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl border border-slate-700 animate-pulse">Waiting for Connection</div>
              )}
-             <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px]">Return to Main Gate</button>
+             <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest transition-colors">Return to Main Gate</button>
            </div>
         </div>
       )}
 
       {gameState.phase === 'prep' && (
         <div className="flex-1 w-full flex flex-col items-center overflow-y-auto p-8 gap-8 animate-fade-in">
-          <h2 className="text-3xl font-black text-white italic uppercase">PREP SECTOR</h2>
+          <h2 className="text-3xl font-black text-white italic uppercase tracking-tighter">PREP SECTOR</h2>
           <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-8">
             <CharacterSelect characters={CHARACTERS} onSelect={(c) => { 
               if (gameState.gameMode === 'MULTIPLAYER') syncService.send('CHAR_SELECT', { charId: c.id });
               setGameState(prev => ({ ...prev, localSelectedChar: c }));
             }} isWarping={false} selectedId={gameState.localSelectedChar?.id} remoteId={gameState.remoteSelectedChar?.id} />
             <div className="flex flex-col gap-6">
-              <button onClick={toggleReady} disabled={!gameState.localSelectedChar} className={`w-full py-6 rounded-3xl font-black uppercase italic text-xl ${gameState.localReady ? 'bg-green-600' : 'bg-blue-600 hover:bg-blue-500'} text-white`}>
+              <button onClick={toggleReady} disabled={!gameState.localSelectedChar} className={`w-full py-6 rounded-3xl font-black uppercase italic text-xl transition-all ${gameState.localReady ? 'bg-green-600 shadow-[0_0_20px_rgba(22,163,74,0.4)]' : 'bg-blue-600 hover:bg-blue-500'} text-white`}>
                 {gameState.localReady ? 'READY!' : 'LOCK IN'}
               </button>
-              <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] text-center">Sever Link</button>
+              <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] text-center tracking-widest">Sever Link</button>
             </div>
           </div>
         </div>
       )}
 
       {gameState.phase === 'battle' && gameState.player && gameState.enemy && (
-        <div className="flex flex-col w-full h-full relative">
+        <div className="flex-1 grid grid-rows-[auto_1fr_auto] h-full w-full relative">
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} matchId={gameState.matchId} mode="header" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
-          <main className="flex-1 flex items-center justify-center bg-slate-950 overflow-hidden relative">
+          
+          <main className="relative flex items-center justify-center bg-slate-950 overflow-hidden game-canvas-container">
              <GameCanvas gameState={gameState} setGameState={setGameState} onGameOver={handleGameOver} />
+             
              {isMenuOpen && (
                <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex flex-col items-center justify-center gap-8 animate-fade-in">
-                 <h2 className="text-5xl font-black text-white italic">SINGULARITY HALTED</h2>
+                 <h2 className="text-5xl font-black text-white italic tracking-tighter">SINGULARITY HALTED</h2>
                  <div className="flex flex-col gap-4 w-64">
-                   <button onClick={() => { setIsMenuOpen(false); setGameState(prev => ({ ...prev, isPaused: false })); }} className="w-full py-4 bg-blue-600 text-white font-black uppercase rounded-2xl">Resume Warp</button>
-                   <button onClick={handleQuit} className="w-full py-4 bg-slate-800 text-white font-black uppercase rounded-2xl border border-slate-700">Sever Connection</button>
+                   <button onClick={() => { setIsMenuOpen(false); setGameState(prev => ({ ...prev, isPaused: false })); }} className="w-full py-4 bg-blue-600 text-white font-black uppercase rounded-2xl shadow-lg transform transition-transform hover:scale-105">Resume Warp</button>
+                   <button onClick={handleQuit} className="w-full py-4 bg-slate-800 text-white font-black uppercase rounded-2xl border border-slate-700 hover:bg-slate-700 transition-colors">Sever Connection</button>
                  </div>
                </div>
              )}
           </main>
+
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} mode="footer" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
         </div>
       )}
