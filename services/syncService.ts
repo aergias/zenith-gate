@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_V170_STABLE';
+  protocol: 'ZENITH_V200_FINAL';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -28,7 +28,7 @@ class SyncService {
     this.status = newStatus;
     console.log(`[SyncService] Link Status: ${newStatus.toUpperCase()}`);
     if (this.onStatusChange) {
-      // Small timeout to ensure the UI handles the change in the next microtask
+      // Use setTimeout to decouple socket events from React render cycles
       setTimeout(() => this.onStatusChange?.(newStatus), 0);
     }
   }
@@ -59,15 +59,15 @@ class SyncService {
     
     this.setStatus('connecting');
 
-    // Using a more isolated relay path to minimize interference from other apps.
-    // The demo channel is often rate-limited or closed by SocketsBay if traffic is high.
-    const relayUrl = `wss://socketsbay.com/wss/v2/1/zenith_gate_relay_v170/`;
+    // SocketsBay /demo/ is the most reliable endpoint for free tier public prototyping.
+    // Most 'ReadyState 3' errors are caused by invalid paths that the server immediately rejects.
+    const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
       this.socket = new WebSocket(relayUrl);
 
       this.socket.onopen = () => {
-        console.log(`[SyncService] Gate Link established: ${relayUrl}`);
+        console.log(`[SyncService] Gate Singularity Linked: ${relayUrl}`);
         this.setStatus('connected');
         this.reconnectAttempts = 0;
         this.startHeartbeat();
@@ -75,34 +75,36 @@ class SyncService {
 
       this.socket.onmessage = (event) => {
         try {
+          // Public demo channel has high noise; we MUST filter strictly
           const msg: SyncMessage = JSON.parse(event.data);
           if (
             msg && 
-            msg.protocol === 'ZENITH_V170_STABLE' && 
+            msg.protocol === 'ZENITH_V200_FINAL' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
             this.onUpdate?.(msg.type, msg.data);
           }
         } catch (e) {
-          // Public relay traffic often contains unrelated data; ignore it silently
+          // Silently discard non-JSON or third-party traffic on the shared channel
         }
       };
 
       this.socket.onerror = (err) => {
         const ws = err.target as WebSocket;
-        console.warn(`[SyncService] Protocol Interference | State: ${ws?.readyState}`);
+        console.warn(`[SyncService] Transmission Error | State: ${ws?.readyState}`);
+        // If we hit ReadyState 3 (CLOSED) or 2 (CLOSING), we need to trigger reconnect
         if (this.status !== 'disconnected') {
           this.setStatus('error');
         }
       };
 
       this.socket.onclose = (event) => {
-        console.warn(`[SyncService] Singularity Destabilized | Code: ${event.code}`);
+        console.warn(`[SyncService] Gate Singularity Closed | Code: ${event.code} | Clean: ${event.wasClean}`);
         
         if (this.status !== 'disconnected') {
-          // Exponential backoff for reconnection to avoid slamming the relay
-          const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 10000);
+          // Reconnection with linear backoff (1s, 2s, 3s... cap at 10s)
+          const delay = Math.min(1000 + (this.reconnectAttempts * 1000), 10000);
           this.reconnectAttempts++;
           
           if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
@@ -112,7 +114,7 @@ class SyncService {
         }
       };
     } catch (err) {
-      console.error('[SyncService] Failed to generate singularity link:', err);
+      console.error('[SyncService] Failed to establish singularity rift:', err);
       this.setStatus('error');
     }
   }
@@ -121,9 +123,10 @@ class SyncService {
     this.stopHeartbeat();
     this.heartbeatInterval = window.setInterval(() => {
       if (this.socket?.readyState === WebSocket.OPEN) {
-        this.send('PING', { t: Date.now() });
+        // Keep-alive to prevent SocketsBay from dropping idle connections
+        this.send('KEEPALIVE', { t: Date.now() });
       }
-    }, 12000);
+    }, 15000);
   }
 
   private stopHeartbeat() {
@@ -140,6 +143,7 @@ class SyncService {
       this.reconnectTimeout = null;
     }
     if (this.socket) {
+      // Clear listeners to prevent recursion/leaks
       this.socket.onopen = null;
       this.socket.onmessage = null;
       this.socket.onerror = null;
@@ -162,13 +166,13 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_V170_STABLE'
+      protocol: 'ZENITH_V200_FINAL'
     };
 
     try {
       this.socket.send(JSON.stringify(payload));
     } catch (err) {
-      console.warn('[SyncService] Burst transmission failed:', err);
+      console.warn('[SyncService] Packet loss during rift burst:', err);
     }
   }
 

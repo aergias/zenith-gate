@@ -75,9 +75,9 @@ const App: React.FC = () => {
   }, [matchInput]);
 
   useEffect(() => {
-    // Show fallback faster (8 seconds) if the connection is struggling
+    // Show fallback even faster (6 seconds) if the Rift is failing to open
     if (gameState.phase === 'lobby' && (connStatus === 'connecting' || connStatus === 'disconnected' || connStatus === 'error')) {
-      const timer = setTimeout(() => setSearchTimeout(true), 8000);
+      const timer = setTimeout(() => setSearchTimeout(true), 6000);
       return () => clearTimeout(timer);
     }
   }, [gameState.phase, connStatus]);
@@ -96,7 +96,10 @@ const App: React.FC = () => {
     
     checkHash();
     window.addEventListener('hashchange', checkHash);
-    return () => window.removeEventListener('hashchange', checkHash);
+    return () => {
+      window.removeEventListener('hashchange', checkHash);
+      syncService.disconnect(); // Hard cleanup on unmount
+    };
   }, [gameState.matchId, handleStartGame]);
 
   useEffect(() => {
@@ -113,7 +116,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState.phase, handleStartGame]); // Added dependencies to avoid stale closures
+  }, [gameState.phase, handleStartGame]);
 
   useEffect(() => {
     syncUpdateRef.current = (type: string, data: any) => {
@@ -165,7 +168,7 @@ const App: React.FC = () => {
             clientId: syncService.getClientId() 
           });
         }
-      }, 1500);
+      }, 2000);
 
       return () => clearInterval(interval);
     }
@@ -244,6 +247,12 @@ const App: React.FC = () => {
     window.location.hash = '';
   }, []);
 
+  const handleRecalibrate = () => {
+    soundService.playUI();
+    setSearchTimeout(false);
+    syncService.connect();
+  };
+
   return (
     <div className="relative w-full h-screen bg-slate-950 overflow-hidden flex flex-col">
       {gameState.phase === 'selection' && (
@@ -290,28 +299,30 @@ const App: React.FC = () => {
                 <div className="flex items-center gap-3 mb-4 justify-center">
                    <div className={`w-3 h-3 rounded-full shadow-[0_0_10px] ${connStatus === 'connected' ? 'bg-green-500 shadow-green-500/50' : connStatus === 'error' ? 'bg-red-600' : 'bg-amber-500 animate-pulse'}`} />
                    <span className={`text-[10px] font-black uppercase tracking-widest ${connStatus === 'connected' ? 'text-green-400' : connStatus === 'error' ? 'text-red-500' : 'text-amber-400'}`}>
-                     {connStatus === 'connected' ? 'Gate Synchronized' : connStatus === 'error' ? 'Singularity Link Blocked' : 'Opening Rift Port...'}
+                     {connStatus === 'connected' ? 'Gate Synchronized' : connStatus === 'error' ? 'Singularity Rift Blocked' : 'Opening Rift Port...'}
                    </span>
                 </div>
                 <div className="text-7xl font-black text-white font-mono bg-slate-950 px-10 py-6 rounded-3xl border-2 border-slate-800 tracking-[0.2em] shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)]">{gameState.matchId}</div>
                 
-                {(connStatus === 'error' || searchTimeout) && (
+                {(connStatus === 'error' || searchTimeout || connStatus === 'connecting') && (
                   <div className="flex flex-col items-center gap-3 mt-8 animate-fade-in">
-                    <p className="text-red-500 text-[11px] font-black uppercase tracking-tighter">Singularity Signal Destabilized</p>
+                    <p className={`text-[11px] font-black uppercase tracking-tighter ${connStatus === 'error' ? 'text-red-500' : 'text-amber-500'}`}>
+                      {connStatus === 'error' ? 'Singularity Signal Destabilized' : 'Rift Protocol Throttled'}
+                    </p>
                     <div className="flex gap-4">
-                      <button onClick={() => syncService.connect()} className="px-8 py-3 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-full hover:bg-slate-700 transition-all shadow-lg">
-                        <i className="fa-solid fa-rotate-right mr-2"></i>
-                        Recalibrate Signal
+                      <button onClick={handleRecalibrate} className="px-8 py-3 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-full hover:bg-slate-700 transition-all shadow-lg flex items-center gap-2">
+                        <i className="fa-solid fa-rotate-right"></i>
+                        Recalibrate
                       </button>
-                      <button onClick={() => { syncService.disconnect(); setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep' })); }} className="px-8 py-3 bg-blue-600 border border-blue-500 text-white text-[10px] font-black uppercase rounded-full hover:bg-blue-500 transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)]">
-                        <i className="fa-solid fa-bolt mr-2"></i>
-                        Warp Solo Instead
+                      <button onClick={() => { syncService.disconnect(); setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep' })); }} className="px-8 py-3 bg-blue-600 border border-blue-500 text-white text-[10px] font-black uppercase rounded-full hover:bg-blue-500 transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)] flex items-center gap-2">
+                        <i className="fa-solid fa-bolt"></i>
+                        Warp Solo
                       </button>
                     </div>
                   </div>
                 )}
 
-                {!searchTimeout && connStatus !== 'error' && (
+                {!searchTimeout && connStatus === 'connected' && (
                   <button onClick={copyInviteLink} className={`mt-6 px-8 py-3 rounded-full text-[10px] font-black uppercase transition-all flex items-center gap-2 ${copied ? 'bg-green-600' : 'bg-slate-800 hover:bg-slate-700'} text-white mx-auto`}>
                     <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`}></i>
                     {copied ? 'Link Copied' : 'Copy Warp Link'}
