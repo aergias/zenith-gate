@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { GameState, CharacterTemplate, Entity, AbilityKey, GameMode, TurnOwner, ArenaLayout } from './types';
 import { CHARACTERS, ARENA_WIDTH, ARENA_HEIGHT, ARENAS } from './constants';
@@ -6,7 +5,7 @@ import CharacterSelect from './components/CharacterSelect';
 import GameCanvas from './components/GameCanvas';
 import HUD from './components/HUD';
 import PostMatch from './components/PostMatch';
-import { syncService } from './services/syncService';
+import { syncService, ConnectionStatus } from './services/syncService';
 import { soundService } from './services/soundService';
 import { getTacticalAdvice, getPostMatchCommentary } from './services/geminiService';
 
@@ -15,6 +14,7 @@ const App: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
   const [detectedSignal, setDetectedSignal] = useState<string | null>(null);
+  const [connStatus, setConnStatus] = useState<ConnectionStatus>('disconnected');
   
   const [gameState, setGameState] = useState<GameState>({
     player: null,
@@ -120,14 +120,16 @@ const App: React.FC = () => {
         isHost: true 
       }));
 
-      syncService.subscribe(id, handleSyncUpdate);
+      syncService.subscribe(id, handleSyncUpdate, (status) => setConnStatus(status));
       
       if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
       syncIntervalRef.current = window.setInterval(() => {
-        syncService.send('HANDSHAKE', { 
-          username: gameState.localUsername, 
-          clientId: syncService.getClientId() 
-        });
+        if (syncService.getStatus() === 'connected') {
+          syncService.send('HANDSHAKE', { 
+            username: gameState.localUsername, 
+            clientId: syncService.getClientId() 
+          });
+        }
       }, 1000);
 
       window.location.hash = `matchId=${id}`;
@@ -143,7 +145,6 @@ const App: React.FC = () => {
     handleStartGame('MULTIPLAYER', newId);
   }, [handleStartGame]);
 
-  // Modified logic: We stay on the selection screen, but pre-fill the match code
   useEffect(() => {
     const checkHash = () => {
       const hash = window.location.hash.substring(1);
@@ -165,7 +166,6 @@ const App: React.FC = () => {
   }, [gameState.phase]);
 
   const getBasePortalUrl = () => {
-    // Ensures a clean base URL without hashes or training slashes
     return window.location.origin + window.location.pathname;
   };
 
@@ -285,6 +285,7 @@ const App: React.FC = () => {
     }));
     window.location.hash = '';
     setDetectedSignal(null);
+    setConnStatus('disconnected');
   }, []);
 
   return (
@@ -299,7 +300,6 @@ const App: React.FC = () => {
           </div>
 
           <div className="bg-slate-900/50 backdrop-blur-xl p-8 rounded-[32px] border border-slate-700 w-full flex flex-col gap-6 shadow-2xl relative">
-            
             <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Identity Confirmation</label>
               <input 
@@ -336,13 +336,11 @@ const App: React.FC = () => {
                     {detectedSignal ? 'Warp to Friend' : 'Join'}
                   </button>
                 </div>
-                
                 <div className="flex items-center gap-3">
                    <div className="h-[1px] bg-slate-800 flex-1"></div>
                    <span className="text-slate-700 text-[8px] font-black uppercase">Host New</span>
                    <div className="h-[1px] bg-slate-800 flex-1"></div>
                 </div>
-
                 <button onClick={generateAndStartHost} className="w-full py-4 bg-slate-800/50 border border-slate-700 hover:border-purple-500 text-white font-black uppercase text-[10px] tracking-widest rounded-2xl transition-all flex items-center justify-center gap-3 group">
                   <i className="fa-solid fa-plus-circle group-hover:rotate-90 transition-transform"></i>
                   Create Singularity
@@ -355,7 +353,6 @@ const App: React.FC = () => {
                   <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Warp Access Protocols</span>
                   {isLocalhost && <span className="text-[8px] text-amber-500 font-black uppercase flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation"></i> Preview Mode</span>}
                </div>
-               
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <button onClick={copyPortalUrl} className="flex items-center gap-3 p-3 bg-slate-900 border border-slate-800 rounded-xl hover:border-blue-500 transition-all group text-left">
                      <div className="w-9 h-9 rounded-lg bg-blue-600/10 flex items-center justify-center text-blue-400 border border-blue-500/20 group-hover:bg-blue-600/20">
@@ -366,7 +363,6 @@ const App: React.FC = () => {
                         <span className="text-slate-500 text-[8px] uppercase">Safe URL for friends</span>
                      </div>
                   </button>
-
                   <div className="flex items-center gap-3 p-3 bg-slate-900 border border-slate-800 rounded-xl group text-left">
                      <div className="w-9 h-9 rounded-lg bg-purple-600/10 flex items-center justify-center text-purple-400 border border-purple-500/20">
                         <i className="fa-solid fa-key"></i>
@@ -377,9 +373,6 @@ const App: React.FC = () => {
                      </div>
                   </div>
                </div>
-               <p className="text-center text-slate-600 text-[8px] font-bold uppercase tracking-widest leading-relaxed">
-                 {isLocalhost ? "You are on a private preview. Links won't work for friends until you deploy." : "Share the 'Base Portal' link if the direct link gives a 404."}
-               </p>
             </div>
           </div>
         </div>
@@ -390,6 +383,12 @@ const App: React.FC = () => {
            <div className="bg-slate-900/50 backdrop-blur-xl p-16 rounded-[40px] border border-slate-700 shadow-2xl w-full flex flex-col items-center gap-10">
              
              <div className="flex flex-col items-center gap-2">
+                <div className="flex items-center gap-2 mb-2">
+                   <div className={`w-2 h-2 rounded-full animate-pulse ${connStatus === 'connected' ? 'bg-green-500' : connStatus === 'connecting' ? 'bg-yellow-500' : 'bg-red-500'}`} />
+                   <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                     Gate Link: {connStatus === 'connected' ? 'Established' : connStatus === 'connecting' ? 'Synchronizing...' : 'Severed'}
+                   </span>
+                </div>
                 <span className="text-blue-500 font-black text-[10px] uppercase tracking-[0.5em]">Active Singularity Code</span>
                 <div className="text-7xl font-black text-white font-mono bg-slate-950 px-10 py-6 rounded-3xl border-2 border-slate-800 shadow-[0_0_40px_rgba(0,0,0,0.5)] tracking-[0.2em] relative group">
                   <div className="absolute inset-0 bg-blue-500/5 animate-pulse rounded-3xl pointer-events-none"></div>
@@ -401,7 +400,6 @@ const App: React.FC = () => {
                     {copied ? 'Link Copied' : 'Copy Direct Warp Link'}
                   </button>
                 </div>
-                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-4 max-w-xs text-center leading-relaxed italic">The direct link uses a hash (#) to stay on the same page.</p>
              </div>
 
              <div className="flex items-center gap-12 w-full justify-center">
@@ -437,11 +435,6 @@ const App: React.FC = () => {
                      <span className={`font-black uppercase tracking-widest text-sm transition-colors ${gameState.remoteUsername ? 'text-white' : 'text-slate-600'}`}>
                        {gameState.remoteUsername || 'Seeking Rival...'}
                      </span>
-                     {gameState.remoteUsername && (
-                        <span className={`text-[8px] font-black px-2 py-0.5 rounded mt-1 uppercase ${!gameState.isHost ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-700 text-slate-400'}`}>
-                          {!gameState.isHost ? 'Sector Master' : 'Challenger'}
-                        </span>
-                     )}
                    </div>
                 </div>
              </div>
@@ -457,12 +450,10 @@ const App: React.FC = () => {
                </div>
              )}
 
-             <div className="flex flex-col items-center gap-4 mt-4">
-               <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest transition-colors flex items-center gap-2">
-                 <i className="fa-solid fa-power-off"></i>
-                 Return to Main Gate
-               </button>
-             </div>
+             <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest transition-colors flex items-center gap-2">
+               <i className="fa-solid fa-power-off"></i>
+               Return to Main Gate
+             </button>
            </div>
         </div>
       )}
@@ -474,12 +465,12 @@ const App: React.FC = () => {
             <div className="flex gap-4">
                <div className="bg-slate-900 border border-slate-700 px-4 py-1.5 rounded-full flex items-center gap-2">
                  <div className={`w-2 h-2 rounded-full ${gameState.localReady ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                 <span className="text-[10px] font-black text-white uppercase tracking-widest">{gameState.localUsername} {gameState.isHost ? '(Master)' : '(Challenger)'}</span>
+                 <span className="text-[10px] font-black text-white uppercase tracking-widest">{gameState.localUsername}</span>
                </div>
                {gameState.gameMode === 'MULTIPLAYER' && (
                  <div className="bg-slate-900 border border-slate-700 px-4 py-1.5 rounded-full flex items-center gap-2">
                    <div className={`w-2 h-2 rounded-full ${gameState.remoteReady ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                   <span className="text-[10px] font-black text-white uppercase tracking-widest">{gameState.remoteUsername || 'FOE'} {!gameState.isHost ? '(Master)' : '(Challenger)'}</span>
+                   <span className="text-[10px] font-black text-white uppercase tracking-widest">{gameState.remoteUsername || 'FOE'}</span>
                  </div>
                )}
             </div>
@@ -500,7 +491,6 @@ const App: React.FC = () => {
               <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl space-y-4">
                 <div className="flex justify-between items-center">
                   <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Battle Sector</span>
-                  {!gameState.isHost && <span className="text-[8px] bg-slate-800 text-slate-500 px-2 py-0.5 rounded uppercase font-bold">Master Selection</span>}
                 </div>
                 <div className="flex flex-col gap-2">
                   {ARENAS.map(arena => (
@@ -539,17 +529,6 @@ const App: React.FC = () => {
             <div className="transform scale-[0.9] lg:scale-[0.95] xl:scale-100 transition-transform duration-500">
                <GameCanvas gameState={gameState} setGameState={setGameState} onGameOver={handleGameOver} />
             </div>
-            {gameState.isPaused && (
-              <div className="absolute inset-0 z-[1000] bg-slate-950/70 backdrop-blur-md flex items-center justify-center animate-fade-in">
-                 <div className="bg-slate-900 border border-slate-700 p-12 rounded-[32px] shadow-2xl flex flex-col items-center gap-8 w-full max-w-sm text-center">
-                    <h3 className="text-4xl font-black text-white italic uppercase tracking-tighter">ZENITH STASIS</h3>
-                    <div className="flex flex-col gap-4 w-full mt-6">
-                      <button onClick={() => setGameState(prev => ({ ...prev, isPaused: false }))} className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold uppercase rounded-xl transition-all">Resume Duel</button>
-                      <button onClick={handleQuit} className="w-full py-4 bg-red-900/20 hover:bg-red-900/40 text-red-500 font-bold uppercase rounded-xl transition-all border border-red-900/50">Sever Rift</button>
-                    </div>
-                 </div>
-              </div>
-            )}
           </main>
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} mode="footer" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
         </div>
@@ -566,7 +545,6 @@ const App: React.FC = () => {
               <i className="fa-solid fa-dharmachakra text-white text-4xl animate-pulse absolute" />
            </div>
            <h3 className="text-4xl font-black text-white italic uppercase tracking-tighter mt-8">INITIATING ZENITH WARP</h3>
-           <p className="text-blue-400 font-mono text-xs uppercase tracking-[0.5em] mt-2 animate-pulse">Synchronizing Universal Signal</p>
         </div>
       )}
     </div>
