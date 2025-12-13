@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_GATE_V3_FINAL';
+  protocol: 'ZENITH_V4_FINAL';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -20,12 +20,10 @@ class SyncService {
   private clientId: string = Math.random().toString(36).substring(7);
   private status: ConnectionStatus = 'disconnected';
   private heartbeatInterval: number | null = null;
-  private reconnectTimeout: number | null = null;
 
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
-    console.log(`[Sync] Status: ${newStatus}`);
     if (this.onStatusChange) this.onStatusChange(newStatus);
   }
 
@@ -35,13 +33,8 @@ class SyncService {
     this.onUpdate = callback;
     if (statusCallback) this.onStatusChange = statusCallback;
 
-    // If matchId changed, we MUST reconnect
-    if (this.matchId !== matchId) {
-      this.disconnect();
-    }
-
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
-      this.matchId = matchId;
+    if (this.socket && this.socket.readyState === WebSocket.OPEN && this.matchId === matchId) {
+      this.setStatus('connected');
       return;
     }
 
@@ -50,12 +43,10 @@ class SyncService {
   }
 
   connect() {
-    if (this.socket) {
-      this.socket.close();
-    }
+    if (this.socket) this.socket.close();
 
     this.setStatus('connecting');
-    // Using a more reliable WSS endpoint for production
+    // Using a reliable public relay endpoint
     const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
@@ -71,62 +62,37 @@ class SyncService {
           const msg: SyncMessage = JSON.parse(event.data);
           if (
             msg && 
-            msg.protocol === 'ZENITH_GATE_V3_FINAL' && 
+            msg.protocol === 'ZENITH_V4_FINAL' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
-            if (msg.type === 'PING') {
-              this.send('PONG', {});
-              return;
-            }
-            if (this.onUpdate) {
-              this.onUpdate(msg.type, msg.data);
-            }
+            if (this.onUpdate) this.onUpdate(msg.type, msg.data);
           }
-        } catch (e) {
-          // Public relay is noisy, ignore other traffic
-        }
+        } catch (e) {}
       };
 
-      this.socket.onerror = (err) => {
-        console.error('[Sync] Socket Error:', err);
-        this.setStatus('error');
-      };
-      
+      this.socket.onerror = () => this.setStatus('error');
       this.socket.onclose = () => {
         if (this.status !== 'disconnected') {
-          this.reconnect();
+          setTimeout(() => this.connect(), 3000);
         }
       };
     } catch (err) {
-      console.error('[Sync] Connection Exception:', err);
       this.setStatus('error');
-      this.reconnect();
     }
   }
 
-  private reconnect() {
-    if (this.reconnectTimeout) window.clearTimeout(this.reconnectTimeout);
-    this.reconnectTimeout = window.setTimeout(() => {
-      if (this.matchId && this.status !== 'disconnected') {
-        this.connect();
-      }
-    }, 2000); 
-  }
-
-  private startHeartbeat() {
+  startHeartbeat() {
     if (this.heartbeatInterval) window.clearInterval(this.heartbeatInterval);
     this.heartbeatInterval = window.setInterval(() => {
       if (this.socket?.readyState === WebSocket.OPEN) {
-        this.send('PING', { t: Date.now() });
+        this.send('KEEP_ALIVE', {});
       }
-    }, 5000);
+    }, 10000);
   }
 
   send(type: string, data: any) {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.matchId) {
-      return;
-    }
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.matchId) return;
 
     const payload: SyncMessage = {
       type,
@@ -134,25 +100,22 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_GATE_V3_FINAL'
+      protocol: 'ZENITH_V4_FINAL'
     };
 
     try {
       this.socket.send(JSON.stringify(payload));
-    } catch (err) {
-      // Failed to send, status will update on next tick
-    }
+    } catch (err) {}
   }
 
   disconnect() {
     this.setStatus('disconnected');
     if (this.heartbeatInterval) window.clearInterval(this.heartbeatInterval);
-    if (this.reconnectTimeout) window.clearTimeout(this.reconnectTimeout);
     if (this.socket) {
       this.socket.close();
       this.socket = null;
     }
-    // Note: Don't clear onUpdate here to maintain React bindings
+    this.matchId = null;
   }
 
   getClientId() { return this.clientId; }
