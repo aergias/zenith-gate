@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_RIFT_PROTOCOL_V500';
+  protocol: 'ZENITH_X_STABLE_V600';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -23,15 +23,15 @@ class SyncService {
   private reconnectTimeout: number | null = null;
   private reconnectAttempts: number = 0;
   private connectionLock: boolean = false;
-  private readonly MAX_ATTEMPTS = 15; // Increased patience for unstable networks
+  private readonly MAX_ATTEMPTS = 12;
 
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
-    console.log(`[SyncService] Rift Link Status: ${newStatus.toUpperCase()}`);
+    console.log(`[SyncService] Rift Transmission Status: ${newStatus.toUpperCase()}`);
     if (this.onStatusChange) {
-      // Small delay to ensure the event loop finishes current tasks
-      setTimeout(() => this.onStatusChange?.(newStatus), 0);
+      // Use requestAnimationFrame to sync with browser UI cycles
+      requestAnimationFrame(() => this.onStatusChange?.(newStatus));
     }
   }
 
@@ -54,10 +54,6 @@ class SyncService {
     this.connect(true);
   }
 
-  /**
-   * Established a connection to the Rift.
-   * @param force Reset retry counters and force a new attempt.
-   */
   connect(force: boolean = false) {
     if (force) {
       this.cleanup();
@@ -67,18 +63,17 @@ class SyncService {
 
     if (this.connectionLock || !this.matchId) return;
     
-    this.cleanup();
     this.connectionLock = true;
     this.setStatus('connecting');
 
-    // SocketsBay /demo/ is the most robust free public endpoint
+    // SocketsBay demo channel is highly reliable if we use clean protocol filtering
     const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
       this.socket = new WebSocket(relayUrl);
 
       this.socket.onopen = () => {
-        console.log(`[SyncService] Rift Harmonic Synchronized: ${relayUrl}`);
+        console.log(`[SyncService] Rift Synchronized successfully.`);
         this.setStatus('connected');
         this.reconnectAttempts = 0;
         this.connectionLock = false;
@@ -88,28 +83,26 @@ class SyncService {
       this.socket.onmessage = (event) => {
         try {
           const msg: SyncMessage = JSON.parse(event.data);
-          // Strict filtering of the shared public channel
           if (
             msg && 
-            msg.protocol === 'ZENITH_RIFT_PROTOCOL_V500' && 
+            msg.protocol === 'ZENITH_X_STABLE_V600' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
             this.onUpdate?.(msg.type, msg.data);
           }
         } catch (e) {
-          // Ignore non-JSON or unrelated packets
+          // Public noise filter
         }
       };
 
       this.socket.onerror = (err) => {
-        console.warn(`[SyncService] Rift Interference detected.`);
+        console.warn(`[SyncService] Rift Disturbance encountered.`);
         this.connectionLock = false;
-        // Don't set error immediately; let onclose handle retry logic
       };
 
       this.socket.onclose = (event) => {
-        console.warn(`[SyncService] Rift Collapsed | Code: ${event.code} | Attempt: ${this.reconnectAttempts}`);
+        console.warn(`[SyncService] Rift Rift Closed | Code: ${event.code} | Attempt: ${this.reconnectAttempts}`);
         this.connectionLock = false;
         this.stopHeartbeat();
         
@@ -120,8 +113,8 @@ class SyncService {
             return;
           }
 
-          // Linear backoff with jitter
-          const delay = 1000 + (this.reconnectAttempts * 1000) + (Math.random() * 500);
+          // Exponential backoff with jitter (1.5s, 3s, 4.5s...)
+          const delay = 1500 + (this.reconnectAttempts * 1500) + (Math.random() * 500);
           this.reconnectAttempts++;
           
           if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
@@ -133,7 +126,7 @@ class SyncService {
         }
       };
     } catch (err) {
-      console.error('[SyncService] Rift Rift Fault:', err);
+      console.error('[SyncService] Rift Initialization Fault:', err);
       this.connectionLock = false;
       this.setStatus('error');
     }
@@ -143,7 +136,7 @@ class SyncService {
     this.stopHeartbeat();
     this.heartbeatInterval = window.setInterval(() => {
       if (this.socket?.readyState === WebSocket.OPEN) {
-        this.send('SYNC_PULSE', { t: Date.now() });
+        this.send('HEARTBEAT', { time: Date.now() });
       }
     }, 15000);
   }
@@ -184,13 +177,13 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_RIFT_PROTOCOL_V500'
+      protocol: 'ZENITH_X_STABLE_V600'
     };
 
     try {
       this.socket.send(JSON.stringify(payload));
     } catch (err) {
-      console.warn('[SyncService] Packet loss in Singularity stream.');
+      console.warn('[SyncService] Burst transmission dropped.');
     }
   }
 
