@@ -14,6 +14,7 @@ const App: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [connStatus, setConnStatus] = useState<ConnectionStatus>('disconnected');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [matchInput, setMatchInput] = useState("");
   
   const [gameState, setGameState] = useState<GameState>({
     player: null,
@@ -39,7 +40,6 @@ const App: React.FC = () => {
     isHost: true 
   });
 
-  const [matchInput, setMatchInput] = useState("");
   const syncUpdateRef = useRef<(type: string, data: any) => void>(() => {});
   const localUsernameRef = useRef(gameState.localUsername);
 
@@ -47,7 +47,26 @@ const App: React.FC = () => {
     localUsernameRef.current = gameState.localUsername;
   }, [gameState.localUsername]);
 
-  // Restored: ESC Key Listener for Battle Phase
+  // AUTO-JOIN FROM HASH
+  useEffect(() => {
+    const handleHash = () => {
+      const hash = window.location.hash;
+      if (hash.startsWith('#matchId=')) {
+        const id = hash.split('=')[1].toUpperCase();
+        if (id && id !== gameState.matchId) {
+          console.log('[App] Detected Match ID in hash:', id);
+          setMatchInput(id);
+          handleStartGame('MULTIPLAYER', id);
+        }
+      }
+    };
+    
+    handleHash();
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
+
+  // ESC Key Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -64,7 +83,7 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [gameState.phase]);
 
-  // Multi-step Discovery Logic
+  // Socket Router
   useEffect(() => {
     syncUpdateRef.current = (type: string, data: any) => {
       switch (type) {
@@ -100,6 +119,7 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // Sync Subscription & Discovery Pulse
   useEffect(() => {
     if (gameState.matchId && (gameState.phase === 'lobby' || gameState.phase === 'prep')) {
       syncService.subscribe(
@@ -115,7 +135,7 @@ const App: React.FC = () => {
             clientId: syncService.getClientId() 
           });
         }
-      }, 1000);
+      }, 800);
 
       return () => clearInterval(interval);
     }
@@ -128,7 +148,10 @@ const App: React.FC = () => {
     soundService.playUI();
     if (mode === 'MULTIPLAYER') {
       setGameState(prev => ({ ...prev, isConnecting: true, gameMode: 'MULTIPLAYER', matchId: id, phase: 'lobby', isHost: true }));
-      window.location.hash = `matchId=${id}`;
+      // Ensure the hash is set for sharing
+      if (window.location.hash !== `#matchId=${id}`) {
+        window.location.hash = `matchId=${id}`;
+      }
     } else {
       syncService.disconnect();
       setGameState(prev => ({ ...prev, gameMode: 'SOLO', matchId: undefined, phase: 'prep', isHost: true }));
@@ -138,6 +161,7 @@ const App: React.FC = () => {
   const generateAndStartHost = useCallback(() => {
     const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
     setMatchInput(newId);
+    // Use the newly generated ID immediately
     handleStartGame('MULTIPLAYER', newId);
   }, [handleStartGame]);
 
@@ -218,7 +242,7 @@ const App: React.FC = () => {
           </div>
           <div className="bg-slate-900/50 p-8 rounded-[32px] border border-slate-700 w-full flex flex-col gap-6 shadow-2xl shrink-0">
             <div className="space-y-2">
-               <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Identity Confirmed</label>
+               <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Identity Trace</label>
                <input 
                 type="text" 
                 value={gameState.localUsername} 
@@ -233,7 +257,7 @@ const App: React.FC = () => {
                 <span className="text-white font-black uppercase tracking-widest text-sm">Solo Training</span>
               </button>
               <div className="flex flex-col gap-4">
-                <div className="flex bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden p-1 focus-within:border-purple-500 transition-colors">
+                <div className="flex bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden p-1 focus-within:border-purple-500 transition-colors shadow-inner">
                   <input type="text" placeholder="Enter Code..." className="bg-transparent text-white px-5 py-3 outline-none flex-1 font-mono text-sm uppercase" value={matchInput} onChange={(e) => setMatchInput(e.target.value)} />
                   <button onClick={() => handleStartGame('MULTIPLAYER')} className="px-6 bg-slate-800 hover:bg-slate-700 text-white font-black uppercase text-[10px] rounded-xl transition-colors">Join</button>
                 </div>
@@ -312,7 +336,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* FIXED: Strict grid layout for Battle phase ensures HUD visibility */}
       {gameState.phase === 'battle' && gameState.player && gameState.enemy && (
         <div className="h-screen w-full grid grid-rows-[auto_1fr_auto] relative overflow-hidden">
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} matchId={gameState.matchId} mode="header" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />

@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_FINAL_STABLE_V8';
+  protocol: 'ZENITH_V12_RELAY';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -24,6 +24,7 @@ class SyncService {
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
+    console.log(`[SyncService] Link Status: ${newStatus}`);
     if (this.onStatusChange) this.onStatusChange(newStatus);
   }
 
@@ -55,13 +56,14 @@ class SyncService {
     }
 
     this.setStatus('connecting');
-    // Using SocketsBay demo channel - high reliability for prototypes
+    // Standard public relay endpoint
     const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
       this.socket = new WebSocket(relayUrl);
 
       this.socket.onopen = () => {
+        console.log('[SyncService] Socket opened');
         this.setStatus('connected');
         this.startHeartbeat();
       };
@@ -71,17 +73,23 @@ class SyncService {
           const msg: SyncMessage = JSON.parse(event.data);
           if (
             msg && 
-            msg.protocol === 'ZENITH_FINAL_STABLE_V8' && 
+            msg.protocol === 'ZENITH_V12_RELAY' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
+            console.debug(`[SyncService] RX: ${msg.type}`);
             if (this.onUpdate) this.onUpdate(msg.type, msg.data);
           }
         } catch (e) {}
       };
 
-      this.socket.onerror = () => this.setStatus('error');
+      this.socket.onerror = (e) => {
+        console.error('[SyncService] Error:', e);
+        this.setStatus('error');
+      };
+
       this.socket.onclose = () => {
+        console.log('[SyncService] Socket closed');
         if (this.status !== 'disconnected') {
           setTimeout(() => {
             if (this.matchId) this.connect();
@@ -111,7 +119,7 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_FINAL_STABLE_V8'
+      protocol: 'ZENITH_V12_RELAY'
     };
 
     try {
