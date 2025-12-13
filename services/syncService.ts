@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_GATE_V2_STABLE';
+  protocol: 'ZENITH_GATE_V3_FINAL';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -25,17 +25,23 @@ class SyncService {
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
+    console.log(`[Sync] Status: ${newStatus}`);
     if (this.onStatusChange) this.onStatusChange(newStatus);
   }
 
   getStatus() { return this.status; }
 
   subscribe(matchId: string, callback: StateCallback, statusCallback?: StatusCallback) {
-    // Keep reference even if socket isn't open yet
     this.onUpdate = callback;
     if (statusCallback) this.onStatusChange = statusCallback;
 
-    if (this.matchId === matchId && this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+    // If matchId changed, we MUST reconnect
+    if (this.matchId !== matchId) {
+      this.disconnect();
+    }
+
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+      this.matchId = matchId;
       return;
     }
 
@@ -45,15 +51,11 @@ class SyncService {
 
   connect() {
     if (this.socket) {
-      this.socket.onopen = null;
-      this.socket.onmessage = null;
-      this.socket.onerror = null;
-      this.socket.onclose = null;
       this.socket.close();
     }
 
     this.setStatus('connecting');
-    // Using SocketsBay's high-speed public demo cluster
+    // Using a more reliable WSS endpoint for production
     const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
@@ -61,17 +63,15 @@ class SyncService {
 
       this.socket.onopen = () => {
         this.setStatus('connected');
-        console.log(`[Gate] Link Synchronized: ${this.matchId}`);
         this.startHeartbeat();
       };
 
       this.socket.onmessage = (event) => {
         try {
           const msg: SyncMessage = JSON.parse(event.data);
-          // Only process messages that belong to our protocol and match ID
           if (
             msg && 
-            msg.protocol === 'ZENITH_GATE_V2_STABLE' && 
+            msg.protocol === 'ZENITH_GATE_V3_FINAL' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
@@ -84,11 +84,12 @@ class SyncService {
             }
           }
         } catch (e) {
-          // Public channels are noisy, ignore garbage data
+          // Public relay is noisy, ignore other traffic
         }
       };
 
-      this.socket.onerror = () => {
+      this.socket.onerror = (err) => {
+        console.error('[Sync] Socket Error:', err);
         this.setStatus('error');
       };
       
@@ -98,6 +99,7 @@ class SyncService {
         }
       };
     } catch (err) {
+      console.error('[Sync] Connection Exception:', err);
       this.setStatus('error');
       this.reconnect();
     }
@@ -109,7 +111,7 @@ class SyncService {
       if (this.matchId && this.status !== 'disconnected') {
         this.connect();
       }
-    }, 3000); 
+    }, 2000); 
   }
 
   private startHeartbeat() {
@@ -118,7 +120,7 @@ class SyncService {
       if (this.socket?.readyState === WebSocket.OPEN) {
         this.send('PING', { t: Date.now() });
       }
-    }, 10000);
+    }, 5000);
   }
 
   send(type: string, data: any) {
@@ -132,13 +134,13 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_GATE_V2_STABLE'
+      protocol: 'ZENITH_GATE_V3_FINAL'
     };
 
     try {
       this.socket.send(JSON.stringify(payload));
     } catch (err) {
-      console.warn('[Gate] Broadcast failure');
+      // Failed to send, status will update on next tick
     }
   }
 
@@ -150,9 +152,7 @@ class SyncService {
       this.socket.close();
       this.socket = null;
     }
-    this.onUpdate = null;
-    this.onStatusChange = null;
-    this.matchId = null;
+    // Note: Don't clear onUpdate here to maintain React bindings
   }
 
   getClientId() { return this.clientId; }

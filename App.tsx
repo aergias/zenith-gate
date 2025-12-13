@@ -92,6 +92,7 @@ const App: React.FC = () => {
   // Connection management
   useEffect(() => {
     if (gameState.matchId && (gameState.phase === 'lobby' || gameState.phase === 'prep')) {
+      // Force subscription update
       syncService.subscribe(
         gameState.matchId, 
         (type, data) => syncUpdateRef.current(type, data), 
@@ -105,7 +106,7 @@ const App: React.FC = () => {
             clientId: syncService.getClientId() 
           });
         }
-      }, 1500);
+      }, 1000);
 
       return () => clearInterval(interval);
     }
