@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { GameState, CharacterTemplate, Entity, AbilityKey, GameMode, TurnOwner, ArenaLayout } from './types';
+import { GameState, CharacterTemplate, Entity, GameMode, ConnectionStatus } from './types';
 import { CHARACTERS, ARENA_WIDTH, ARENA_HEIGHT, ARENAS } from './constants';
 import CharacterSelect from './components/CharacterSelect';
 import GameCanvas from './components/GameCanvas';
 import HUD from './components/HUD';
 import PostMatch from './components/PostMatch';
-import { syncService, ConnectionStatus } from './services/syncService';
+import { syncService } from './services/syncService';
 import { soundService } from './services/soundService';
 import { getTacticalAdvice, getPostMatchCommentary } from './services/geminiService';
 
@@ -43,6 +43,79 @@ const App: React.FC = () => {
   const [matchInput, setMatchInput] = useState("");
   const syncIntervalRef = useRef<number | null>(null);
 
+  // Persistent reference for handling sync updates without stale closures
+  const syncUpdateRef = useRef<(type: string, data: any) => void>(() => {});
+
+  // Handle incoming messages from the sync service
+  useEffect(() => {
+    syncUpdateRef.current = (type: string, data: any) => {
+      switch (type) {
+        case 'HANDSHAKE':
+          setGameState(prev => {
+            const isMaster = syncService.getClientId() < data.clientId;
+            return { 
+              ...prev, 
+              remoteUsername: data.username,
+              isHost: isMaster
+            };
+          });
+          // Immediately reply to confirm we are here
+          syncService.send('HANDSHAKE_REPLY', { 
+            username: gameState.localUsername, 
+            clientId: syncService.getClientId() 
+          });
+          break;
+        case 'HANDSHAKE_REPLY':
+          setGameState(prev => ({ 
+            ...prev, 
+            remoteUsername: data.username,
+            isHost: syncService.getClientId() < data.clientId 
+          }));
+          break;
+        case 'ARENA_SELECT':
+          setGameState(prev => ({ ...prev, selectedArenaId: data.arenaId }));
+          break;
+        case 'CHAR_SELECT':
+          const remoteChar = CHARACTERS.find(c => c.id === data.charId);
+          if (remoteChar) {
+            setGameState(prev => ({ ...prev, remoteSelectedChar: remoteChar }));
+          }
+          break;
+        case 'READY_STATUS':
+          setGameState(prev => ({ ...prev, remoteReady: data.isReady }));
+          break;
+        case 'START_GAME':
+          setGameState(prev => ({ ...prev, phase: 'battle', countdown: 1200 }));
+          break;
+      }
+    };
+  }, [gameState.localUsername]);
+
+  // Manage Global Connection Subscription
+  useEffect(() => {
+    if (gameState.matchId && (gameState.phase === 'lobby' || gameState.phase === 'prep')) {
+      syncService.subscribe(
+        gameState.matchId, 
+        (type, data) => syncUpdateRef.current(type, data), 
+        (status) => setConnStatus(status)
+      );
+
+      // Start the handshake loop
+      const interval = window.setInterval(() => {
+        if (syncService.getStatus() === 'connected' && !gameState.remoteUsername) {
+          syncService.send('HANDSHAKE', { 
+            username: gameState.localUsername, 
+            clientId: syncService.getClientId() 
+          });
+        }
+      }, 1500);
+
+      return () => {
+        clearInterval(interval);
+      };
+    }
+  }, [gameState.matchId, gameState.phase]);
+
   // Connection Diagnostics
   const isLocalhost = window.location.hostname === 'localhost' || 
                       window.location.hostname === '127.0.0.1' || 
@@ -59,47 +132,6 @@ const App: React.FC = () => {
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, [gameState.phase]);
-
-  const handleSyncUpdate = useCallback((type: string, data: any) => {
-    switch (type) {
-      case 'HANDSHAKE':
-        setGameState(prev => {
-          const isMaster = syncService.getClientId() < data.clientId;
-          return { 
-            ...prev, 
-            remoteUsername: data.username,
-            isHost: isMaster
-          };
-        });
-        syncService.send('HANDSHAKE_REPLY', { 
-          username: gameState.localUsername, 
-          clientId: syncService.getClientId() 
-        });
-        break;
-      case 'HANDSHAKE_REPLY':
-        setGameState(prev => ({ 
-          ...prev, 
-          remoteUsername: data.username,
-          isHost: syncService.getClientId() < data.clientId 
-        }));
-        break;
-      case 'ARENA_SELECT':
-        setGameState(prev => ({ ...prev, selectedArenaId: data.arenaId }));
-        break;
-      case 'CHAR_SELECT':
-        const remoteChar = CHARACTERS.find(c => c.id === data.charId);
-        if (remoteChar) {
-          setGameState(prev => ({ ...prev, remoteSelectedChar: remoteChar }));
-        }
-        break;
-      case 'READY_STATUS':
-        setGameState(prev => ({ ...prev, remoteReady: data.isReady }));
-        break;
-      case 'START_GAME':
-        setGameState(prev => ({ ...prev, phase: 'battle', countdown: 1200 }));
-        break;
-    }
-  }, [gameState.localUsername]);
 
   const handleStartGame = useCallback((mode: GameMode, overrideId?: string) => {
     const id = (overrideId || matchInput).trim().toUpperCase();
@@ -119,25 +151,12 @@ const App: React.FC = () => {
         phase: 'lobby',
         isHost: true 
       }));
-
-      syncService.subscribe(id, handleSyncUpdate, (status) => setConnStatus(status));
-      
-      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
-      syncIntervalRef.current = window.setInterval(() => {
-        if (syncService.getStatus() === 'connected') {
-          syncService.send('HANDSHAKE', { 
-            username: gameState.localUsername, 
-            clientId: syncService.getClientId() 
-          });
-        }
-      }, 1000);
-
       window.location.hash = `matchId=${id}`;
     } else {
       syncService.disconnect();
       setGameState(prev => ({ ...prev, gameMode: 'SOLO', matchId: undefined, phase: 'prep', isHost: true }));
     }
-  }, [matchInput, handleSyncUpdate, gameState.localUsername]);
+  }, [matchInput]);
 
   const generateAndStartHost = useCallback(() => {
     const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -159,10 +178,7 @@ const App: React.FC = () => {
 
     checkHash();
     window.addEventListener('hashchange', checkHash);
-    return () => {
-      window.removeEventListener('hashchange', checkHash);
-      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
-    };
+    return () => window.removeEventListener('hashchange', checkHash);
   }, [gameState.phase]);
 
   const getBasePortalUrl = () => {
@@ -244,7 +260,7 @@ const App: React.FC = () => {
     const advice = await getTacticalAdvice(playerChar, enemyChar);
     const selectedLayout = ARENAS.find(a => a.id === gameState.selectedArenaId) || ARENAS[0];
 
-    if (gameState.gameMode === 'MULTIPLAYER') {
+    if (gameState.gameMode === 'MULTIPLAYER' && gameState.isHost) {
       syncService.send('START_GAME', {});
     }
 
@@ -279,7 +295,6 @@ const App: React.FC = () => {
 
   const handleQuit = useCallback(() => {
     syncService.disconnect();
-    if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
     setGameState(prev => ({
       ...prev, player: null, enemy: null, winner: null, phase: 'selection', gameMode: 'SOLO', matchId: undefined, remoteSelectedChar: undefined, remoteUsername: undefined, localReady: false, remoteReady: false, localSelectedChar: undefined, isHost: true
     }));

@@ -1,6 +1,9 @@
 
 export type Point = { x: number; y: number };
 
+// Added ConnectionStatus type to resolve import errors
+export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
 export enum AbilityKey {
   A = 'a',
   S = 's',

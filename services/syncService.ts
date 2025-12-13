@@ -1,14 +1,14 @@
-import { GameState, CharacterTemplate } from '../types';
+import { ConnectionStatus } from '../types';
 
 type SyncMessage = {
-  type: 'HANDSHAKE' | 'HANDSHAKE_REPLY' | 'CHAR_SELECT' | 'TURN_UPDATE' | 'START_GAME' | 'ARENA_SELECT' | 'READY_STATUS' | 'PING' | 'PONG';
+  type: string;
   matchId: string;
   senderId: string;
   data: any;
   timestamp: number;
+  protocol: 'ZENITH_GATE_V1';
 };
 
-export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 type StateCallback = (type: string, data: any) => void;
 type StatusCallback = (status: ConnectionStatus) => void;
 
@@ -23,6 +23,7 @@ class SyncService {
   private reconnectTimeout: number | null = null;
 
   private setStatus(newStatus: ConnectionStatus) {
+    if (this.status === newStatus) return;
     this.status = newStatus;
     if (this.onStatusChange) this.onStatusChange(newStatus);
   }
@@ -30,6 +31,13 @@ class SyncService {
   getStatus() { return this.status; }
 
   subscribe(matchId: string, callback: StateCallback, statusCallback?: StatusCallback) {
+    // If we're already subscribed to this match, just update the callback
+    if (this.matchId === matchId && this.socket?.readyState === WebSocket.OPEN) {
+      this.onUpdate = callback;
+      if (statusCallback) this.onStatusChange = statusCallback;
+      return;
+    }
+
     this.matchId = matchId;
     this.onUpdate = callback;
     if (statusCallback) this.onStatusChange = statusCallback;
@@ -43,9 +51,7 @@ class SyncService {
     }
 
     this.setStatus('connecting');
-    // Using a more robust public demo endpoint if available, or hardening the existing one.
-    // We add a random suffix to the demo path to slightly reduce collision noise if the provider supports it,
-    // though for SocketsBay demo, it's often a single shared pipe.
+    // Using the public demo endpoint but with strict message filtering
     const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
@@ -59,9 +65,14 @@ class SyncService {
 
       this.socket.onmessage = (event) => {
         try {
-          // Public channels are noisy. We only care about valid JSON that matches our matchId.
           const msg: SyncMessage = JSON.parse(event.data);
-          if (msg && msg.matchId === this.matchId && msg.senderId !== this.clientId) {
+          // Filter out noise from other users on the public demo channel
+          if (
+            msg && 
+            msg.protocol === 'ZENITH_GATE_V1' && 
+            msg.matchId === this.matchId && 
+            msg.senderId !== this.clientId
+          ) {
             if (msg.type === 'PING') {
               this.send('PONG', {});
               return;
@@ -71,18 +82,16 @@ class SyncService {
             }
           }
         } catch (e) {
-          // Silently ignore non-JSON or unrelated traffic from the public demo channel
+          // Ignore invalid JSON or unrelated traffic
         }
       };
 
-      this.socket.onerror = (event) => {
+      this.socket.onerror = () => {
         this.setStatus('error');
-        console.warn(`Gate Link Warning: Signal interference detected.`);
       };
       
-      this.socket.onclose = (event) => {
+      this.socket.onclose = () => {
         if (this.status !== 'disconnected') {
-          this.setStatus('connecting');
           this.reconnect();
         }
       };
@@ -95,7 +104,7 @@ class SyncService {
   private reconnect() {
     if (this.reconnectTimeout) window.clearTimeout(this.reconnectTimeout);
     this.reconnectTimeout = window.setTimeout(() => {
-      if (this.matchId) this.connect();
+      if (this.matchId && this.status !== 'disconnected') this.connect();
     }, 3000);
   }
 
@@ -103,10 +112,10 @@ class SyncService {
     if (this.heartbeatInterval) window.clearInterval(this.heartbeatInterval);
     this.heartbeatInterval = window.setInterval(() => {
       this.send('PING', {});
-    }, 10000);
+    }, 15000);
   }
 
-  send(type: SyncMessage['type'], data: any) {
+  send(type: string, data: any) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.matchId) {
       return;
     }
@@ -116,7 +125,8 @@ class SyncService {
       matchId: this.matchId,
       senderId: this.clientId,
       data,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      protocol: 'ZENITH_GATE_V1'
     };
 
     try {
