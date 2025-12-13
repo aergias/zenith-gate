@@ -7,8 +7,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
   <script>
-    // Critical: Polyfill process immediately. 
-    // This must happen before any modules (like the Gemini SDK) are loaded.
+    // Critical: Polyfill process immediately to prevent crashes in the Gemini SDK
     window.process = window.process || { env: {} };
   </script>
   <style>
@@ -48,7 +47,6 @@
 </head>
 <body>
   <div id="root"></div>
-  <!-- Vite will replace this with the bundled JS during build -->
-  <script type="module" src="./index.tsx"></script>
+  <script type="module" src="/index.tsx"></script>
 </body>
 </html>
