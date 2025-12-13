@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_X_STABLE_V600';
+  protocol: 'ZENITH_V7_STABLE';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -23,14 +23,14 @@ class SyncService {
   private reconnectTimeout: number | null = null;
   private reconnectAttempts: number = 0;
   private connectionLock: boolean = false;
-  private readonly MAX_ATTEMPTS = 12;
+  private readonly MAX_ATTEMPTS = 20; // Increased for higher stability
 
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
-    console.log(`[SyncService] Rift Transmission Status: ${newStatus.toUpperCase()}`);
+    console.log(`[SyncService] Rift Signal: ${newStatus.toUpperCase()}`);
     if (this.onStatusChange) {
-      // Use requestAnimationFrame to sync with browser UI cycles
+      // Use requestAnimationFrame to ensure we don't block the UI thread during status flips
       requestAnimationFrame(() => this.onStatusChange?.(newStatus));
     }
   }
@@ -63,17 +63,18 @@ class SyncService {
 
     if (this.connectionLock || !this.matchId) return;
     
+    this.cleanup();
     this.connectionLock = true;
     this.setStatus('connecting');
 
-    // SocketsBay demo channel is highly reliable if we use clean protocol filtering
+    // Using SocketsBay demo channel - ensures maximum availability
     const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
       this.socket = new WebSocket(relayUrl);
 
       this.socket.onopen = () => {
-        console.log(`[SyncService] Rift Synchronized successfully.`);
+        console.log(`[SyncService] Rift Harmonic Established.`);
         this.setStatus('connected');
         this.reconnectAttempts = 0;
         this.connectionLock = false;
@@ -83,26 +84,27 @@ class SyncService {
       this.socket.onmessage = (event) => {
         try {
           const msg: SyncMessage = JSON.parse(event.data);
+          // Strict protocol filtering to ignore noise on the demo channel
           if (
             msg && 
-            msg.protocol === 'ZENITH_X_STABLE_V600' && 
+            msg.protocol === 'ZENITH_V7_STABLE' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
             this.onUpdate?.(msg.type, msg.data);
           }
         } catch (e) {
-          // Public noise filter
+          // Public relay noise is expected
         }
       };
 
       this.socket.onerror = (err) => {
-        console.warn(`[SyncService] Rift Disturbance encountered.`);
+        console.warn(`[SyncService] Rift Distortion detected.`);
         this.connectionLock = false;
       };
 
       this.socket.onclose = (event) => {
-        console.warn(`[SyncService] Rift Rift Closed | Code: ${event.code} | Attempt: ${this.reconnectAttempts}`);
+        console.warn(`[SyncService] Rift Collapsed | Code: ${event.code} | Attempt: ${this.reconnectAttempts}`);
         this.connectionLock = false;
         this.stopHeartbeat();
         
@@ -113,8 +115,8 @@ class SyncService {
             return;
           }
 
-          // Exponential backoff with jitter (1.5s, 3s, 4.5s...)
-          const delay = 1500 + (this.reconnectAttempts * 1500) + (Math.random() * 500);
+          // Jittered linear backoff for fairer reconnection
+          const delay = 1000 + (this.reconnectAttempts * 1000) + (Math.random() * 500);
           this.reconnectAttempts++;
           
           if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
@@ -126,7 +128,7 @@ class SyncService {
         }
       };
     } catch (err) {
-      console.error('[SyncService] Rift Initialization Fault:', err);
+      console.error('[SyncService] Rift Fault:', err);
       this.connectionLock = false;
       this.setStatus('error');
     }
@@ -136,7 +138,7 @@ class SyncService {
     this.stopHeartbeat();
     this.heartbeatInterval = window.setInterval(() => {
       if (this.socket?.readyState === WebSocket.OPEN) {
-        this.send('HEARTBEAT', { time: Date.now() });
+        this.send('HEARTBEAT', { t: Date.now() });
       }
     }, 15000);
   }
@@ -177,13 +179,13 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_X_STABLE_V600'
+      protocol: 'ZENITH_V7_STABLE'
     };
 
     try {
       this.socket.send(JSON.stringify(payload));
     } catch (err) {
-      console.warn('[SyncService] Burst transmission dropped.');
+      console.warn('[SyncService] Packet loss in Rift stream.');
     }
   }
 
