@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Entity, AbilityKey, StatusType } from '../types';
 import { soundService } from '../services/soundService';
@@ -73,11 +72,15 @@ const HUD: React.FC<Props> = ({ player, enemy, isPaused, tacticalAdvice, matchId
 
         <div className="flex flex-col items-center flex-1 max-w-md">
            <div className="flex justify-between w-full mb-1 px-1">
-              <span className="text-red-400 font-black uppercase text-[10px] tracking-widest">{remoteName || enemy.template.name}</span>
-              <span className="text-red-400 font-bold text-[10px] tabular-nums">{Math.ceil(Math.max(0, enemy.stats.hp))} HP</span>
+              <span className="font-black uppercase text-[10px] tracking-widest" style={{ color: enemy.template.color }}>{remoteName || enemy.template.name}</span>
+              <span className="font-bold text-[10px] tabular-nums" style={{ color: enemy.template.color }}>{Math.ceil(Math.max(0, enemy.stats.hp))} HP</span>
            </div>
            <div className="w-full h-2.5 bg-slate-950 border border-slate-800 rounded-full overflow-hidden relative">
-             <div className="h-full bg-gradient-to-r from-red-600 to-orange-500 transition-all duration-150" style={{ width: `${Math.max(0, (enemy.stats.hp / enemy.stats.maxHp) * 100)}%` }} />
+             <div className="h-full transition-all duration-150 shadow-[0_0_10px_rgba(255,255,255,0.1)]" 
+                  style={{ 
+                    width: `${Math.max(0, (enemy.stats.hp / enemy.stats.maxHp) * 100)}%`,
+                    backgroundColor: enemy.template.color 
+                  }} />
            </div>
            <div className="mt-1">{renderStatus(enemy)}</div>
         </div>
@@ -101,15 +104,19 @@ const HUD: React.FC<Props> = ({ player, enemy, isPaused, tacticalAdvice, matchId
       <div className="flex items-center gap-8">
         <div className="flex flex-col gap-2 w-80">
           <div className="flex justify-between px-1">
-            <span className="text-emerald-400 font-black text-[10px] uppercase tracking-widest">{localName}</span>
+            <span className="font-black text-[10px] uppercase tracking-widest" style={{ color: player.template.color }}>{localName}</span>
             <span className="text-white font-black text-[10px] tabular-nums">{Math.ceil(Math.max(0, player.stats.hp))} / {player.stats.maxHp} HP</span>
           </div>
           <div className="h-4 bg-slate-950 border border-slate-800 rounded-full overflow-hidden relative shadow-inner">
-            <div className="h-full bg-gradient-to-r from-emerald-600 to-green-400 transition-all duration-150" style={{ width: `${Math.max(0, (player.stats.hp / player.stats.maxHp) * 100)}%` }} />
+            <div className="h-full transition-all duration-150 shadow-[0_0_15px_rgba(255,255,255,0.1)]" 
+                 style={{ 
+                    width: `${Math.max(0, (player.stats.hp / player.stats.maxHp) * 100)}%`,
+                    backgroundColor: player.template.color 
+                 }} />
             {getShield(player) && <div className="absolute inset-y-0 left-0 bg-white/30 border-r border-white/40" style={{ width: `${Math.min(100, (getShield(player)!.value! / player.stats.maxHp) * 100)}%` }} />}
           </div>
           <div className="h-2 bg-slate-950 border border-slate-800 rounded-full overflow-hidden relative">
-            <div className="h-full bg-gradient-to-r from-blue-600 to-cyan-400 transition-all duration-150" style={{ width: `${Math.max(0, (player.stats.mana / player.stats.maxMana) * 100)}%` }} />
+            <div className="h-full bg-gradient-to-r from-slate-700 via-blue-600 to-cyan-400 transition-all duration-150" style={{ width: `${Math.max(0, (player.stats.mana / player.stats.maxMana) * 100)}%` }} />
           </div>
         </div>
 
