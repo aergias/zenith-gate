@@ -42,7 +42,6 @@ const App: React.FC = () => {
 
   const [matchInput, setMatchInput] = useState("");
   
-  // Persistent reference for handling sync updates without stale closures
   const syncUpdateRef = useRef<(type: string, data: any) => void>(() => {});
   const localUsernameRef = useRef(gameState.localUsername);
 
@@ -50,20 +49,15 @@ const App: React.FC = () => {
     localUsernameRef.current = gameState.localUsername;
   }, [gameState.localUsername]);
 
-  // Handle incoming messages from the sync service
+  // Unified incoming message handler
   useEffect(() => {
     syncUpdateRef.current = (type: string, data: any) => {
       switch (type) {
         case 'HANDSHAKE':
           setGameState(prev => {
             const isMaster = syncService.getClientId() < data.clientId;
-            return { 
-              ...prev, 
-              remoteUsername: data.username,
-              isHost: isMaster
-            };
+            return { ...prev, remoteUsername: data.username, isHost: isMaster };
           });
-          // Immediately reply to confirm we are here
           syncService.send('HANDSHAKE_REPLY', { 
             username: localUsernameRef.current, 
             clientId: syncService.getClientId() 
@@ -95,7 +89,7 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Manage Global Connection Subscription
+  // Connection management
   useEffect(() => {
     if (gameState.matchId && (gameState.phase === 'lobby' || gameState.phase === 'prep')) {
       syncService.subscribe(
@@ -104,7 +98,6 @@ const App: React.FC = () => {
         (status) => setConnStatus(status)
       );
 
-      // Start the handshake loop
       const interval = window.setInterval(() => {
         if (syncService.getStatus() === 'connected' && !gameState.remoteUsername) {
           syncService.send('HANDSHAKE', { 
@@ -112,25 +105,16 @@ const App: React.FC = () => {
             clientId: syncService.getClientId() 
           });
         }
-      }, 2000);
+      }, 1500);
 
-      return () => {
-        clearInterval(interval);
-      };
+      return () => clearInterval(interval);
     }
   }, [gameState.matchId, gameState.phase, gameState.remoteUsername]);
 
-  // Global Escape Key Listener for Pausing
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && gameState.phase === 'battle') {
-        setGameState(prev => ({ ...prev, isPaused: !prev.isPaused }));
-        soundService.playUI();
-      }
-    };
-    window.addEventListener('keydown', handleEscape);
-    return () => window.removeEventListener('keydown', handleEscape);
-  }, [gameState.phase]);
+  const handleManualResync = () => {
+    soundService.playUI();
+    syncService.connect();
+  };
 
   const handleStartGame = useCallback((mode: GameMode, overrideId?: string) => {
     const id = (overrideId || matchInput).trim().toUpperCase();
@@ -180,21 +164,10 @@ const App: React.FC = () => {
     return () => window.removeEventListener('hashchange', checkHash);
   }, [gameState.phase]);
 
-  const getBasePortalUrl = () => {
-    return window.location.origin + window.location.pathname;
-  };
-
-  const copyPortalUrl = () => {
-    navigator.clipboard.writeText(getBasePortalUrl());
-    setUrlCopied(true);
-    setTimeout(() => setUrlCopied(false), 2000);
-    soundService.playUI();
-  };
-
   const copyInviteLink = () => {
     const id = gameState.matchId || matchInput;
     if (!id) return;
-    const shareUrl = `${getBasePortalUrl()}#matchId=${id}`;
+    const shareUrl = `${window.location.origin}${window.location.pathname}#matchId=${id}`;
     navigator.clipboard.writeText(shareUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -275,22 +248,8 @@ const App: React.FC = () => {
 
   const handleGameOver = useCallback(async (winner: 'player' | 'enemy' | 'Player1' | 'Player2') => {
     soundService.playVictory();
-    const isPlayerWinner = winner === 'player' || winner === 'Player1';
-    
     setGameState(prev => ({ ...prev, phase: 'results', winner }));
-
-    if (gameState.player && gameState.enemy) {
-      const winnerName = isPlayerWinner ? gameState.localUsername : (gameState.remoteUsername || gameState.enemy.template.name);
-      const loserName = isPlayerWinner ? (gameState.remoteUsername || gameState.enemy.template.name) : gameState.localUsername;
-      
-      try {
-        const commentary = await getPostMatchCommentary(winnerName, loserName, isPlayerWinner);
-        setGameState(prev => ({ ...prev, tacticalAdvice: commentary }));
-      } catch (error) {
-        console.error("Failed to fetch post-match commentary:", error);
-      }
-    }
-  }, [gameState.localUsername, gameState.remoteUsername, gameState.player, gameState.enemy]);
+  }, []);
 
   const handleQuit = useCallback(() => {
     syncService.disconnect();
@@ -301,10 +260,6 @@ const App: React.FC = () => {
     setDetectedSignal(null);
     setConnStatus('disconnected');
   }, []);
-
-  const isLocalhost = window.location.hostname === 'localhost' || 
-                      window.location.hostname === '127.0.0.1' || 
-                      window.location.hostname.includes('stackblitz');
 
   return (
     <div className="relative w-full h-screen bg-slate-950 overflow-hidden flex flex-col items-center">
@@ -348,10 +303,9 @@ const App: React.FC = () => {
                     className="bg-transparent text-white px-5 py-3 outline-none flex-1 font-mono text-sm uppercase placeholder:text-slate-700 tracking-[0.2em]" 
                     value={matchInput} 
                     onChange={(e) => { setMatchInput(e.target.value); setDetectedSignal(null); }} 
-                    onKeyDown={(e) => e.key === 'Enter' && handleStartGame('MULTIPLAYER')}
                   />
-                  <button onClick={() => handleStartGame('MULTIPLAYER')} className={`px-6 font-black uppercase text-[10px] tracking-widest transition-all rounded-xl ${detectedSignal ? 'bg-purple-500 text-white animate-pulse shadow-[0_0_15px_rgba(168,85,247,0.5)]' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
-                    {detectedSignal ? 'Warp to Friend' : 'Join'}
+                  <button onClick={() => handleStartGame('MULTIPLAYER')} className={`px-6 font-black uppercase text-[10px] tracking-widest transition-all rounded-xl ${detectedSignal ? 'bg-purple-500 text-white animate-pulse' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>
+                    {detectedSignal ? 'Warp' : 'Join'}
                   </button>
                 </div>
                 <div className="flex items-center gap-3">
@@ -359,38 +313,11 @@ const App: React.FC = () => {
                    <span className="text-slate-700 text-[8px] font-black uppercase">Host New</span>
                    <div className="h-[1px] bg-slate-800 flex-1"></div>
                 </div>
-                <button onClick={generateAndStartHost} className="w-full py-4 bg-slate-800/50 border border-slate-700 hover:border-purple-500 text-white font-black uppercase text-[10px] tracking-widest rounded-2xl transition-all flex items-center justify-center gap-3 group">
-                  <i className="fa-solid fa-plus-circle group-hover:rotate-90 transition-transform"></i>
+                <button onClick={generateAndStartHost} className="w-full py-4 bg-slate-800/50 border border-slate-700 hover:border-purple-500 text-white font-black uppercase text-[10px] tracking-widest rounded-2xl transition-all flex items-center justify-center gap-3">
+                  <i className="fa-solid fa-plus-circle"></i>
                   Create Singularity
                 </button>
               </div>
-            </div>
-
-            <div className="bg-slate-950/50 border border-slate-800 rounded-3xl p-6 flex flex-col gap-4">
-               <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Warp Access Protocols</span>
-                  {isLocalhost && <span className="text-[8px] text-amber-500 font-black uppercase flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation"></i> Preview Mode</span>}
-               </div>
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <button onClick={copyPortalUrl} className="flex items-center gap-3 p-3 bg-slate-900 border border-slate-800 rounded-xl hover:border-blue-500 transition-all group text-left">
-                     <div className="w-9 h-9 rounded-lg bg-blue-600/10 flex items-center justify-center text-blue-400 border border-blue-500/20 group-hover:bg-blue-600/20">
-                        <i className={`fa-solid ${urlCopied ? 'fa-check' : 'fa-link'}`}></i>
-                     </div>
-                     <div className="flex flex-col">
-                        <span className="text-white font-black text-[9px] uppercase">Base Portal Link</span>
-                        <span className="text-slate-500 text-[8px] uppercase">Safe URL for friends</span>
-                     </div>
-                  </button>
-                  <div className="flex items-center gap-3 p-3 bg-slate-900 border border-slate-800 rounded-xl group text-left">
-                     <div className="w-9 h-9 rounded-lg bg-purple-600/10 flex items-center justify-center text-purple-400 border border-purple-500/20">
-                        <i className="fa-solid fa-key"></i>
-                     </div>
-                     <div className="flex flex-col">
-                        <span className="text-white font-black text-[9px] uppercase">Code Sharing</span>
-                        <span className="text-slate-500 text-[8px] uppercase">Manual entry method</span>
-                     </div>
-                  </div>
-               </div>
             </div>
           </div>
         </div>
@@ -401,36 +328,35 @@ const App: React.FC = () => {
            <div className="bg-slate-900/50 backdrop-blur-xl p-16 rounded-[40px] border border-slate-700 shadow-2xl w-full flex flex-col items-center gap-10">
              
              <div className="flex flex-col items-center gap-2">
-                <div className="flex items-center gap-2 mb-2">
-                   <div className={`w-2 h-2 rounded-full ${connStatus === 'connected' ? 'bg-green-500' : connStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'}`} />
-                   <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                     Gate Link: {connStatus === 'connected' ? 'Synchronized' : connStatus === 'connecting' ? 'Synchronizing...' : 'Severed'}
-                   </span>
+                <div className="flex flex-col items-center gap-2 mb-2">
+                   <div className="flex items-center gap-2">
+                     <div className={`w-3 h-3 rounded-full ${connStatus === 'connected' ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-red-500 animate-pulse'}`} />
+                     <span className={`text-[10px] font-black uppercase tracking-widest ${connStatus === 'connected' ? 'text-green-400' : 'text-red-400'}`}>
+                       Link Status: {connStatus === 'connected' ? 'Synchronized' : 'Searching for Signal...'}
+                     </span>
+                   </div>
+                   {connStatus !== 'connected' && (
+                     <button onClick={handleManualResync} className="text-[8px] font-black uppercase text-blue-400 hover:text-white underline">
+                       Force Resync
+                     </button>
+                   )}
                 </div>
                 <span className="text-blue-500 font-black text-[10px] uppercase tracking-[0.5em]">Active Singularity Code</span>
                 <div className="text-7xl font-black text-white font-mono bg-slate-950 px-10 py-6 rounded-3xl border-2 border-slate-800 shadow-[0_0_40px_rgba(0,0,0,0.5)] tracking-[0.2em] relative group">
-                  <div className="absolute inset-0 bg-blue-500/5 animate-pulse rounded-3xl pointer-events-none"></div>
                   {gameState.matchId}
                 </div>
-                <div className="flex items-center gap-4 mt-6">
-                  <button onClick={copyInviteLink} className={`px-8 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${copied ? 'bg-green-600 text-white' : 'bg-slate-800 text-blue-400 border border-slate-700 hover:bg-slate-700'}`}>
-                    <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'} mr-2`}></i>
-                    {copied ? 'Link Copied' : 'Copy Direct Warp Link'}
-                  </button>
-                </div>
+                <button onClick={copyInviteLink} className={`mt-6 px-8 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${copied ? 'bg-green-600' : 'bg-slate-800 hover:bg-slate-700'} text-white`}>
+                  <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'} mr-2`}></i>
+                  {copied ? 'Link Copied' : 'Copy Warp Link'}
+                </button>
              </div>
 
              <div className="flex items-center gap-12 w-full justify-center">
                 <div className="flex flex-col items-center gap-4 group">
-                   <div className="w-24 h-24 bg-blue-600/20 border-2 border-blue-500 rounded-full flex items-center justify-center text-4xl text-blue-400 animate-pulse shadow-[0_0_20px_rgba(59,130,246,0.3)]">
+                   <div className="w-24 h-24 bg-blue-600/20 border-2 border-blue-500 rounded-full flex items-center justify-center text-4xl text-blue-400 shadow-[0_0_20px_rgba(59,130,246,0.3)]">
                      <i className="fa-solid fa-user"></i>
                    </div>
-                   <div className="flex flex-col items-center">
-                     <span className="text-white font-black uppercase tracking-widest text-sm">{gameState.localUsername}</span>
-                     <span className={`text-[8px] font-black px-2 py-0.5 rounded mt-1 uppercase ${gameState.isHost ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-700 text-slate-400'}`}>
-                       {gameState.isHost ? 'Sector Master' : 'Challenger'}
-                     </span>
-                   </div>
+                   <span className="text-white font-black uppercase tracking-widest text-sm">{gameState.localUsername}</span>
                 </div>
                 
                 <div className="flex flex-col items-center gap-2">
@@ -439,9 +365,6 @@ const App: React.FC = () => {
                    </div>
                    <div className="flex items-center gap-2">
                       <i className="fa-solid fa-circle-nodes text-slate-600 text-xl"></i>
-                      <div className="flex gap-0.5">
-                        {[1,2,3].map(i => <div key={i} className="w-1 h-1 rounded-full bg-blue-500 animate-bounce" style={{animationDelay: `${i*200}ms`}} />)}
-                      </div>
                    </div>
                 </div>
 
@@ -449,11 +372,9 @@ const App: React.FC = () => {
                    <div className={`w-24 h-24 rounded-full flex items-center justify-center text-4xl border-2 transition-all duration-1000 ${gameState.remoteUsername ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_20px_rgba(147,51,234,0.3)] scale-110' : 'bg-slate-800 border-slate-700 text-slate-600 border-dashed animate-pulse'}`}>
                      <i className={`fa-solid ${gameState.remoteUsername ? 'fa-user-check' : 'fa-spinner fa-spin'}`}></i>
                    </div>
-                   <div className="flex flex-col items-center">
-                     <span className={`font-black uppercase tracking-widest text-sm transition-colors ${gameState.remoteUsername ? 'text-white' : 'text-slate-600'}`}>
-                       {gameState.remoteUsername || 'Seeking Rival...'}
-                     </span>
-                   </div>
+                   <span className={`font-black uppercase tracking-widest text-sm ${gameState.remoteUsername ? 'text-white' : 'text-slate-600'}`}>
+                     {gameState.remoteUsername || 'Seeking Rival...'}
+                   </span>
                 </div>
              </div>
 
@@ -462,14 +383,12 @@ const App: React.FC = () => {
                  Initialize Prep Sector
                </button>
              ) : (
-               <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase italic tracking-widest rounded-2xl border border-slate-700 animate-pulse flex items-center gap-3">
-                 <i className="fa-solid fa-satellite-dish"></i>
-                 Broadcasting Signal...
+               <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase italic tracking-widest rounded-2xl border border-slate-700 flex items-center gap-3">
+                 Waiting for Connection...
                </div>
              )}
 
-             <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest transition-colors flex items-center gap-2">
-               <i className="fa-solid fa-power-off"></i>
+             <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest transition-colors">
                Return to Main Gate
              </button>
            </div>
@@ -478,60 +397,23 @@ const App: React.FC = () => {
 
       {gameState.phase === 'prep' && (
         <div className="flex-1 w-full flex flex-col items-center overflow-y-auto p-8 gap-8 animate-fade-in">
-          <div className="flex flex-col items-center gap-2">
-            <h2 className="text-3xl font-black text-white italic tracking-tighter uppercase">PREP SECTOR</h2>
-            <div className="flex gap-4">
-               <div className="bg-slate-900 border border-slate-700 px-4 py-1.5 rounded-full flex items-center gap-2">
-                 <div className={`w-2 h-2 rounded-full ${gameState.localReady ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                 <span className="text-[10px] font-black text-white uppercase tracking-widest">{gameState.localUsername}</span>
-               </div>
-               {gameState.gameMode === 'MULTIPLAYER' && (
-                 <div className="bg-slate-900 border border-slate-700 px-4 py-1.5 rounded-full flex items-center gap-2">
-                   <div className={`w-2 h-2 rounded-full ${gameState.remoteReady ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                   <span className="text-[10px] font-black text-white uppercase tracking-widest">{gameState.remoteUsername || 'FOE'}</span>
-                 </div>
-               )}
-            </div>
-          </div>
-
+          <h2 className="text-3xl font-black text-white italic tracking-tighter uppercase">PREP SECTOR</h2>
           <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-8">
-            <div className="space-y-8">
-              <CharacterSelect 
-                characters={CHARACTERS} 
-                onSelect={handleCharacterSelect} 
-                isWarping={false}
-                selectedId={gameState.localSelectedChar?.id}
-                remoteId={gameState.remoteSelectedChar?.id}
-              />
-            </div>
-            
+            <CharacterSelect characters={CHARACTERS} onSelect={handleCharacterSelect} isWarping={false} selectedId={gameState.localSelectedChar?.id} remoteId={gameState.remoteSelectedChar?.id} />
             <div className="flex flex-col gap-6">
               <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Battle Sector</span>
-                </div>
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Arena Layout</span>
                 <div className="flex flex-col gap-2">
                   {ARENAS.map(arena => (
-                    <button 
-                      key={arena.id} 
-                      disabled={!gameState.isHost}
-                      onClick={() => handleArenaSelect(arena.id)} 
-                      className={`w-full px-4 py-3 rounded-xl text-xs font-black uppercase text-left transition-all border ${gameState.selectedArenaId === arena.id ? 'bg-blue-600 border-blue-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'} ${!gameState.isHost ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105 active:scale-95'}`}
-                    >
+                    <button key={arena.id} disabled={!gameState.isHost} onClick={() => handleArenaSelect(arena.id)} className={`w-full px-4 py-3 rounded-xl text-xs font-black uppercase text-left transition-all border ${gameState.selectedArenaId === arena.id ? 'bg-blue-600 border-blue-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
                       {arena.name}
                     </button>
                   ))}
                 </div>
               </div>
-
-              <button 
-                onClick={toggleReady} 
-                disabled={!gameState.localSelectedChar}
-                className={`w-full py-6 rounded-3xl font-black uppercase italic tracking-tighter text-xl transition-all shadow-2xl ${gameState.localReady ? 'bg-green-600 text-white scale-95 shadow-[0_0_30px_rgba(22,163,74,0.4)]' : 'bg-blue-600 hover:bg-blue-500 text-white hover:-translate-y-1 shadow-[0_0_30px_rgba(37,99,235,0.4)]'}`}
-              >
-                {!gameState.localSelectedChar ? 'Select Champion' : gameState.localReady ? 'READY!' : 'LOCK IN'}
+              <button onClick={toggleReady} disabled={!gameState.localSelectedChar} className={`w-full py-6 rounded-3xl font-black uppercase italic tracking-tighter text-xl transition-all ${gameState.localReady ? 'bg-green-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}>
+                {gameState.localReady ? 'READY!' : 'LOCK IN'}
               </button>
-              
               <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest text-center transition-colors">
                  Sever Singularity
               </button>
@@ -543,10 +425,8 @@ const App: React.FC = () => {
       {gameState.phase === 'battle' && gameState.player && gameState.enemy && (
         <div className="flex flex-col w-full h-full">
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} matchId={gameState.matchId} mode="header" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
-          <main className="flex-1 flex items-center justify-center bg-slate-900/50 relative overflow-hidden">
-            <div className="transform scale-[0.9] lg:scale-[0.95] xl:scale-100 transition-transform duration-500">
-               <GameCanvas gameState={gameState} setGameState={setGameState} onGameOver={handleGameOver} />
-            </div>
+          <main className="flex-1 flex items-center justify-center bg-slate-900/50 relative">
+             <GameCanvas gameState={gameState} setGameState={setGameState} onGameOver={handleGameOver} />
           </main>
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} mode="footer" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
         </div>
@@ -554,16 +434,6 @@ const App: React.FC = () => {
 
       {gameState.phase === 'results' && gameState.player && gameState.enemy && (
         <PostMatch winner={gameState.winner!} player={gameState.player} enemy={gameState.enemy} onRestart={handleQuit} localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
-      )}
-
-      {isWarping && (
-        <div className="fixed inset-0 z-[200] bg-slate-950/80 backdrop-blur-2xl flex flex-col items-center justify-center animate-fade-in text-center">
-           <div className="relative w-64 h-64 flex items-center justify-center">
-              <div className="w-32 h-32 border-8 border-t-blue-500 border-r-transparent border-b-purple-500 border-l-transparent rounded-full animate-spin shadow-[0_0_50px_rgba(59,130,246,0.5)]" />
-              <i className="fa-solid fa-dharmachakra text-white text-4xl animate-pulse absolute" />
-           </div>
-           <h3 className="text-4xl font-black text-white italic uppercase tracking-tighter mt-8">INITIATING ZENITH WARP</h3>
-        </div>
       )}
     </div>
   );
