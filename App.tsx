@@ -143,7 +143,7 @@ const App: React.FC = () => {
     handleStartGame('MULTIPLAYER', newId);
   }, [handleStartGame]);
 
-  // Ensure we stay on selection phase even if hash is present
+  // Modified logic: We stay on the selection screen, but pre-fill the match code
   useEffect(() => {
     const checkHash = () => {
       const hash = window.location.hash.substring(1);
@@ -165,7 +165,7 @@ const App: React.FC = () => {
   }, [gameState.phase]);
 
   const getBasePortalUrl = () => {
-    // Ensures a clean URL without hashes or trailing garbage
+    // Ensures a clean base URL without hashes or training slashes
     return window.location.origin + window.location.pathname;
   };
 
@@ -378,7 +378,7 @@ const App: React.FC = () => {
                   </div>
                </div>
                <p className="text-center text-slate-600 text-[8px] font-bold uppercase tracking-widest leading-relaxed">
-                 {isLocalhost ? "You are on a private preview. Links won't work for friends until you deploy to Vercel/Netlify." : "Share the 'Base Portal' link if the direct link gives a 404."}
+                 {isLocalhost ? "You are on a private preview. Links won't work for friends until you deploy." : "Share the 'Base Portal' link if the direct link gives a 404."}
                </p>
             </div>
           </div>
