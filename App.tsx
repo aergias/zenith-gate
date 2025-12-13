@@ -41,10 +41,14 @@ const App: React.FC = () => {
   });
 
   const [matchInput, setMatchInput] = useState("");
-  const syncIntervalRef = useRef<number | null>(null);
-
+  
   // Persistent reference for handling sync updates without stale closures
   const syncUpdateRef = useRef<(type: string, data: any) => void>(() => {});
+  const localUsernameRef = useRef(gameState.localUsername);
+
+  useEffect(() => {
+    localUsernameRef.current = gameState.localUsername;
+  }, [gameState.localUsername]);
 
   // Handle incoming messages from the sync service
   useEffect(() => {
@@ -61,7 +65,7 @@ const App: React.FC = () => {
           });
           // Immediately reply to confirm we are here
           syncService.send('HANDSHAKE_REPLY', { 
-            username: gameState.localUsername, 
+            username: localUsernameRef.current, 
             clientId: syncService.getClientId() 
           });
           break;
@@ -89,7 +93,7 @@ const App: React.FC = () => {
           break;
       }
     };
-  }, [gameState.localUsername]);
+  }, []);
 
   // Manage Global Connection Subscription
   useEffect(() => {
@@ -104,22 +108,17 @@ const App: React.FC = () => {
       const interval = window.setInterval(() => {
         if (syncService.getStatus() === 'connected' && !gameState.remoteUsername) {
           syncService.send('HANDSHAKE', { 
-            username: gameState.localUsername, 
+            username: localUsernameRef.current, 
             clientId: syncService.getClientId() 
           });
         }
-      }, 1500);
+      }, 2000);
 
       return () => {
         clearInterval(interval);
       };
     }
-  }, [gameState.matchId, gameState.phase]);
-
-  // Connection Diagnostics
-  const isLocalhost = window.location.hostname === 'localhost' || 
-                      window.location.hostname === '127.0.0.1' || 
-                      window.location.hostname.includes('stackblitz');
+  }, [gameState.matchId, gameState.phase, gameState.remoteUsername]);
 
   // Global Escape Key Listener for Pausing
   useEffect(() => {
@@ -303,6 +302,10 @@ const App: React.FC = () => {
     setConnStatus('disconnected');
   }, []);
 
+  const isLocalhost = window.location.hostname === 'localhost' || 
+                      window.location.hostname === '127.0.0.1' || 
+                      window.location.hostname.includes('stackblitz');
+
   return (
     <div className="relative w-full h-screen bg-slate-950 overflow-hidden flex flex-col items-center">
       {gameState.phase === 'selection' && (
@@ -399,9 +402,9 @@ const App: React.FC = () => {
              
              <div className="flex flex-col items-center gap-2">
                 <div className="flex items-center gap-2 mb-2">
-                   <div className={`w-2 h-2 rounded-full animate-pulse ${connStatus === 'connected' ? 'bg-green-500' : connStatus === 'connecting' ? 'bg-yellow-500' : 'bg-red-500'}`} />
+                   <div className={`w-2 h-2 rounded-full ${connStatus === 'connected' ? 'bg-green-500' : connStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'}`} />
                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                     Gate Link: {connStatus === 'connected' ? 'Established' : connStatus === 'connecting' ? 'Synchronizing...' : 'Severed'}
+                     Gate Link: {connStatus === 'connected' ? 'Synchronized' : connStatus === 'connecting' ? 'Synchronizing...' : 'Severed'}
                    </span>
                 </div>
                 <span className="text-blue-500 font-black text-[10px] uppercase tracking-[0.5em]">Active Singularity Code</span>
