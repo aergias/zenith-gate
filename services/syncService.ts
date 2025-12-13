@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_V160_STABLE';
+  protocol: 'ZENITH_V170_STABLE';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -26,7 +26,7 @@ class SyncService {
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
-    console.log(`[SyncService] State: ${newStatus.toUpperCase()}`);
+    console.log(`[SyncService] Link Status: ${newStatus.toUpperCase()}`);
     if (this.onStatusChange) {
       // Small timeout to ensure the UI handles the change in the next microtask
       setTimeout(() => this.onStatusChange?.(newStatus), 0);
@@ -59,15 +59,15 @@ class SyncService {
     
     this.setStatus('connecting');
 
-    // SocketsBay /demo/ is the most stable endpoint for unauthenticated prototypes.
-    // Custom sub-paths without an API key often reject connections with State 3 immediately.
-    const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
+    // Using a more isolated relay path to minimize interference from other apps.
+    // The demo channel is often rate-limited or closed by SocketsBay if traffic is high.
+    const relayUrl = `wss://socketsbay.com/wss/v2/1/zenith_gate_relay_v170/`;
     
     try {
       this.socket = new WebSocket(relayUrl);
 
       this.socket.onopen = () => {
-        console.log(`[SyncService] Link Open: ${relayUrl}`);
+        console.log(`[SyncService] Gate Link established: ${relayUrl}`);
         this.setStatus('connected');
         this.reconnectAttempts = 0;
         this.startHeartbeat();
@@ -78,30 +78,30 @@ class SyncService {
           const msg: SyncMessage = JSON.parse(event.data);
           if (
             msg && 
-            msg.protocol === 'ZENITH_V160_STABLE' && 
+            msg.protocol === 'ZENITH_V170_STABLE' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
             this.onUpdate?.(msg.type, msg.data);
           }
         } catch (e) {
-          // Ignore unrelated noise on public relay
+          // Public relay traffic often contains unrelated data; ignore it silently
         }
       };
 
       this.socket.onerror = (err) => {
         const ws = err.target as WebSocket;
-        console.warn(`[SyncService] Socket Error | ReadyState: ${ws?.readyState}`);
+        console.warn(`[SyncService] Protocol Interference | State: ${ws?.readyState}`);
         if (this.status !== 'disconnected') {
           this.setStatus('error');
         }
       };
 
       this.socket.onclose = (event) => {
-        console.warn(`[SyncService] Socket Closed | Code: ${event.code}`);
+        console.warn(`[SyncService] Singularity Destabilized | Code: ${event.code}`);
         
         if (this.status !== 'disconnected') {
-          // Exponential backoff with a cap
+          // Exponential backoff for reconnection to avoid slamming the relay
           const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 10000);
           this.reconnectAttempts++;
           
@@ -112,7 +112,7 @@ class SyncService {
         }
       };
     } catch (err) {
-      console.error('[SyncService] WebSocket initialization failed:', err);
+      console.error('[SyncService] Failed to generate singularity link:', err);
       this.setStatus('error');
     }
   }
@@ -162,13 +162,13 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_V160_STABLE'
+      protocol: 'ZENITH_V170_STABLE'
     };
 
     try {
       this.socket.send(JSON.stringify(payload));
     } catch (err) {
-      console.warn('[SyncService] Data transmission failed:', err);
+      console.warn('[SyncService] Burst transmission failed:', err);
     }
   }
 

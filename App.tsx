@@ -75,8 +75,9 @@ const App: React.FC = () => {
   }, [matchInput]);
 
   useEffect(() => {
+    // Show fallback faster (8 seconds) if the connection is struggling
     if (gameState.phase === 'lobby' && (connStatus === 'connecting' || connStatus === 'disconnected' || connStatus === 'error')) {
-      const timer = setTimeout(() => setSearchTimeout(true), 10000);
+      const timer = setTimeout(() => setSearchTimeout(true), 8000);
       return () => clearTimeout(timer);
     }
   }, [gameState.phase, connStatus]);
@@ -112,7 +113,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState.phase]);
+  }, [gameState.phase, handleStartGame]); // Added dependencies to avoid stale closures
 
   useEffect(() => {
     syncUpdateRef.current = (type: string, data: any) => {
@@ -289,20 +290,22 @@ const App: React.FC = () => {
                 <div className="flex items-center gap-3 mb-4 justify-center">
                    <div className={`w-3 h-3 rounded-full shadow-[0_0_10px] ${connStatus === 'connected' ? 'bg-green-500 shadow-green-500/50' : connStatus === 'error' ? 'bg-red-600' : 'bg-amber-500 animate-pulse'}`} />
                    <span className={`text-[10px] font-black uppercase tracking-widest ${connStatus === 'connected' ? 'text-green-400' : connStatus === 'error' ? 'text-red-500' : 'text-amber-400'}`}>
-                     {connStatus === 'connected' ? 'Gate Synchronized' : connStatus === 'error' ? 'Connection Blocked' : 'Searching for Signal...'}
+                     {connStatus === 'connected' ? 'Gate Synchronized' : connStatus === 'error' ? 'Singularity Link Blocked' : 'Opening Rift Port...'}
                    </span>
                 </div>
                 <div className="text-7xl font-black text-white font-mono bg-slate-950 px-10 py-6 rounded-3xl border-2 border-slate-800 tracking-[0.2em] shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)]">{gameState.matchId}</div>
                 
                 {(connStatus === 'error' || searchTimeout) && (
-                  <div className="flex flex-col items-center gap-3 mt-4 animate-fade-in">
-                    <p className="text-red-400 text-[10px] font-bold uppercase">Multiverse Link Unstable</p>
+                  <div className="flex flex-col items-center gap-3 mt-8 animate-fade-in">
+                    <p className="text-red-500 text-[11px] font-black uppercase tracking-tighter">Singularity Signal Destabilized</p>
                     <div className="flex gap-4">
-                      <button onClick={() => syncService.connect()} className="px-6 py-2 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-full hover:bg-slate-700 transition-all">
-                        Retry Signal
+                      <button onClick={() => syncService.connect()} className="px-8 py-3 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-full hover:bg-slate-700 transition-all shadow-lg">
+                        <i className="fa-solid fa-rotate-right mr-2"></i>
+                        Recalibrate Signal
                       </button>
-                      <button onClick={() => setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep' }))} className="px-6 py-2 bg-blue-900/40 border border-blue-800 text-blue-200 text-[10px] font-black uppercase rounded-full hover:bg-blue-800/60 transition-all">
-                        Warp Solo
+                      <button onClick={() => { syncService.disconnect(); setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep' })); }} className="px-8 py-3 bg-blue-600 border border-blue-500 text-white text-[10px] font-black uppercase rounded-full hover:bg-blue-500 transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)]">
+                        <i className="fa-solid fa-bolt mr-2"></i>
+                        Warp Solo Instead
                       </button>
                     </div>
                   </div>
@@ -324,8 +327,7 @@ const App: React.FC = () => {
                <button onClick={() => setGameState(prev => ({ ...prev, phase: 'prep' }))} className="px-12 py-5 bg-blue-600 hover:bg-blue-500 text-white font-black uppercase rounded-2xl shadow-xl transform transition-all hover:scale-105 active:scale-95 italic tracking-tighter">Initialize Prep Sector</button>
              ) : (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl border border-slate-700 animate-pulse">Waiting for Rival...</div>
-                  <button onClick={() => setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep' }))} className="text-blue-500 hover:text-blue-300 text-[9px] font-black uppercase tracking-widest underline underline-offset-4 transition-colors">Play Solo Training Instead</button>
+                  <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl border border-slate-700 animate-pulse">Waiting for Rival Response...</div>
                 </div>
              )}
              <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest transition-colors flex items-center gap-2 mt-4">
