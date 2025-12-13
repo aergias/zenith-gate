@@ -15,6 +15,7 @@ const App: React.FC = () => {
   const [connStatus, setConnStatus] = useState<ConnectionStatus>('disconnected');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [matchInput, setMatchInput] = useState("");
+  const [searchTimeout, setSearchTimeout] = useState(false);
   
   const [gameState, setGameState] = useState<GameState>({
     player: null,
@@ -47,26 +48,56 @@ const App: React.FC = () => {
     localUsernameRef.current = gameState.localUsername;
   }, [gameState.localUsername]);
 
-  // AUTO-JOIN FROM HASH
+  const handleStartGame = useCallback((mode: GameMode, overrideId?: string) => {
+    const id = (overrideId || matchInput).trim().toUpperCase();
+    if (mode === 'MULTIPLAYER' && !id) return alert("Please enter a Singularity Code.");
+
+    soundService.playUI();
+    setSearchTimeout(false);
+    
+    if (mode === 'MULTIPLAYER') {
+      setGameState(prev => ({ 
+        ...prev, 
+        isConnecting: true, 
+        gameMode: 'MULTIPLAYER', 
+        matchId: id, 
+        phase: 'lobby', 
+        isHost: true,
+        remoteUsername: undefined 
+      }));
+      if (window.location.hash !== `#matchId=${id}`) {
+        window.location.hash = `matchId=${id}`;
+      }
+    } else {
+      syncService.disconnect();
+      setGameState(prev => ({ ...prev, gameMode: 'SOLO', matchId: undefined, phase: 'prep', isHost: true }));
+    }
+  }, [matchInput]);
+
   useEffect(() => {
-    const handleHash = () => {
+    if (gameState.phase === 'lobby' && (connStatus === 'connecting' || connStatus === 'disconnected' || connStatus === 'error')) {
+      const timer = setTimeout(() => setSearchTimeout(true), 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [gameState.phase, connStatus]);
+
+  useEffect(() => {
+    const checkHash = () => {
       const hash = window.location.hash;
-      if (hash.startsWith('#matchId=')) {
-        const id = hash.split('=')[1].toUpperCase();
+      if (hash.includes('matchId=')) {
+        const id = hash.split('matchId=')[1].split('&')[0].trim().toUpperCase();
         if (id && id !== gameState.matchId) {
-          console.log('[App] Detected Match ID in hash:', id);
           setMatchInput(id);
-          handleStartGame('MULTIPLAYER', id);
+          setTimeout(() => handleStartGame('MULTIPLAYER', id), 150);
         }
       }
     };
     
-    handleHash();
-    window.addEventListener('hashchange', handleHash);
-    return () => window.removeEventListener('hashchange', handleHash);
-  }, []);
+    checkHash();
+    window.addEventListener('hashchange', checkHash);
+    return () => window.removeEventListener('hashchange', checkHash);
+  }, [gameState.matchId, handleStartGame]);
 
-  // ESC Key Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -83,7 +114,6 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [gameState.phase]);
 
-  // Socket Router
   useEffect(() => {
     syncUpdateRef.current = (type: string, data: any) => {
       switch (type) {
@@ -119,7 +149,6 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Sync Subscription & Discovery Pulse
   useEffect(() => {
     if (gameState.matchId && (gameState.phase === 'lobby' || gameState.phase === 'prep')) {
       syncService.subscribe(
@@ -135,33 +164,15 @@ const App: React.FC = () => {
             clientId: syncService.getClientId() 
           });
         }
-      }, 800);
+      }, 1500);
 
       return () => clearInterval(interval);
     }
   }, [gameState.matchId, gameState.phase, gameState.remoteUsername]);
 
-  const handleStartGame = useCallback((mode: GameMode, overrideId?: string) => {
-    const id = (overrideId || matchInput).trim().toUpperCase();
-    if (mode === 'MULTIPLAYER' && !id) return alert("Please enter a Singularity Code.");
-
-    soundService.playUI();
-    if (mode === 'MULTIPLAYER') {
-      setGameState(prev => ({ ...prev, isConnecting: true, gameMode: 'MULTIPLAYER', matchId: id, phase: 'lobby', isHost: true }));
-      // Ensure the hash is set for sharing
-      if (window.location.hash !== `#matchId=${id}`) {
-        window.location.hash = `matchId=${id}`;
-      }
-    } else {
-      syncService.disconnect();
-      setGameState(prev => ({ ...prev, gameMode: 'SOLO', matchId: undefined, phase: 'prep', isHost: true }));
-    }
-  }, [matchInput]);
-
   const generateAndStartHost = useCallback(() => {
     const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
     setMatchInput(newId);
-    // Use the newly generated ID immediately
     handleStartGame('MULTIPLAYER', newId);
   }, [handleStartGame]);
 
@@ -237,7 +248,7 @@ const App: React.FC = () => {
       {gameState.phase === 'selection' && (
         <div className="flex-1 flex flex-col items-center justify-center gap-6 animate-fade-in w-full max-w-4xl p-6 mx-auto overflow-y-auto">
           <div className="text-center space-y-2 shrink-0">
-            <h1 className="text-7xl font-black text-white italic tracking-tighter drop-shadow-2xl">ZENITH GATE</h1>
+            <h1 className="text-7xl font-black text-white italic tracking-tighter drop-shadow-2xl uppercase">Zenith Gate</h1>
             <p className="text-blue-400 font-mono text-[10px] tracking-[0.6em] uppercase">Arena of the Infinite</p>
           </div>
           <div className="bg-slate-900/50 p-8 rounded-[32px] border border-slate-700 w-full flex flex-col gap-6 shadow-2xl shrink-0">
@@ -276,16 +287,33 @@ const App: React.FC = () => {
            <div className="bg-slate-900/50 p-16 rounded-[40px] border border-slate-700 shadow-2xl w-full flex flex-col items-center gap-10">
              <div className="text-center">
                 <div className="flex items-center gap-3 mb-4 justify-center">
-                   <div className={`w-3 h-3 rounded-full shadow-[0_0_10px] ${connStatus === 'connected' ? 'bg-green-500 shadow-green-500/50' : 'bg-red-500 shadow-red-500/50 animate-pulse'}`} />
-                   <span className={`text-[10px] font-black uppercase tracking-widest ${connStatus === 'connected' ? 'text-green-400' : 'text-red-400'}`}>
-                     {connStatus === 'connected' ? 'Gate Synchronized' : 'Searching for Signal...'}
+                   <div className={`w-3 h-3 rounded-full shadow-[0_0_10px] ${connStatus === 'connected' ? 'bg-green-500 shadow-green-500/50' : connStatus === 'error' ? 'bg-red-600' : 'bg-amber-500 animate-pulse'}`} />
+                   <span className={`text-[10px] font-black uppercase tracking-widest ${connStatus === 'connected' ? 'text-green-400' : connStatus === 'error' ? 'text-red-500' : 'text-amber-400'}`}>
+                     {connStatus === 'connected' ? 'Gate Synchronized' : connStatus === 'error' ? 'Connection Blocked' : 'Searching for Signal...'}
                    </span>
                 </div>
                 <div className="text-7xl font-black text-white font-mono bg-slate-950 px-10 py-6 rounded-3xl border-2 border-slate-800 tracking-[0.2em] shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)]">{gameState.matchId}</div>
-                <button onClick={copyInviteLink} className={`mt-6 px-8 py-3 rounded-full text-[10px] font-black uppercase transition-all flex items-center gap-2 ${copied ? 'bg-green-600' : 'bg-slate-800 hover:bg-slate-700'} text-white mx-auto`}>
-                  <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`}></i>
-                  {copied ? 'Link Copied' : 'Copy Warp Link'}
-                </button>
+                
+                {(connStatus === 'error' || searchTimeout) && (
+                  <div className="flex flex-col items-center gap-3 mt-4 animate-fade-in">
+                    <p className="text-red-400 text-[10px] font-bold uppercase">Multiverse Link Unstable</p>
+                    <div className="flex gap-4">
+                      <button onClick={() => syncService.connect()} className="px-6 py-2 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-full hover:bg-slate-700 transition-all">
+                        Retry Signal
+                      </button>
+                      <button onClick={() => setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep' }))} className="px-6 py-2 bg-blue-900/40 border border-blue-800 text-blue-200 text-[10px] font-black uppercase rounded-full hover:bg-blue-800/60 transition-all">
+                        Warp Solo
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {!searchTimeout && connStatus !== 'error' && (
+                  <button onClick={copyInviteLink} className={`mt-6 px-8 py-3 rounded-full text-[10px] font-black uppercase transition-all flex items-center gap-2 ${copied ? 'bg-green-600' : 'bg-slate-800 hover:bg-slate-700'} text-white mx-auto`}>
+                    <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`}></i>
+                    {copied ? 'Link Copied' : 'Copy Warp Link'}
+                  </button>
+                )}
              </div>
              <div className="flex items-center gap-12 w-full justify-center">
                 <div className="text-center"><div className="w-24 h-24 bg-blue-600/20 border-2 border-blue-500 rounded-full flex items-center justify-center text-4xl text-blue-400 shadow-lg"><i className="fa-solid fa-user"></i></div><span className="text-white font-black uppercase text-sm mt-4 block">{gameState.localUsername}</span></div>
@@ -295,9 +323,12 @@ const App: React.FC = () => {
              {gameState.remoteUsername ? (
                <button onClick={() => setGameState(prev => ({ ...prev, phase: 'prep' }))} className="px-12 py-5 bg-blue-600 hover:bg-blue-500 text-white font-black uppercase rounded-2xl shadow-xl transform transition-all hover:scale-105 active:scale-95 italic tracking-tighter">Initialize Prep Sector</button>
              ) : (
-                <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl border border-slate-700 animate-pulse">Waiting for Connection...</div>
+                <div className="flex flex-col items-center gap-4">
+                  <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl border border-slate-700 animate-pulse">Waiting for Rival...</div>
+                  <button onClick={() => setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep' }))} className="text-blue-500 hover:text-blue-300 text-[9px] font-black uppercase tracking-widest underline underline-offset-4 transition-colors">Play Solo Training Instead</button>
+                </div>
              )}
-             <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest transition-colors flex items-center gap-2">
+             <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest transition-colors flex items-center gap-2 mt-4">
                <i className="fa-solid fa-arrow-left"></i>
                Return to Main Gate
              </button>
@@ -339,24 +370,21 @@ const App: React.FC = () => {
       {gameState.phase === 'battle' && gameState.player && gameState.enemy && (
         <div className="h-screen w-full grid grid-rows-[auto_1fr_auto] relative overflow-hidden">
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} matchId={gameState.matchId} mode="header" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
-          
           <main className="relative bg-slate-950 overflow-hidden game-canvas-container flex items-center justify-center min-h-0">
              <GameCanvas gameState={gameState} setGameState={setGameState} onGameOver={handleGameOver} />
-             
              {isMenuOpen && (
                <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex flex-col items-center justify-center gap-8 animate-fade-in p-6">
                  <div className="text-center space-y-2">
-                    <h2 className="text-6xl font-black text-white italic tracking-tighter drop-shadow-2xl">SINGULARITY HALTED</h2>
-                    <p className="text-blue-400 font-mono text-xs uppercase tracking-[0.5em]">Gate systems on standby</p>
+                    <h2 className="text-6xl font-black text-white italic tracking-tighter drop-shadow-2xl uppercase">Gate Paused</h2>
+                    <p className="text-blue-400 font-mono text-xs uppercase tracking-[0.5em]">Systems on standby</p>
                  </div>
                  <div className="flex flex-col gap-4 w-full max-w-xs">
-                   <button onClick={() => { setIsMenuOpen(false); setGameState(prev => ({ ...prev, isPaused: false })); }} className="w-full py-5 bg-blue-600 text-white font-black uppercase rounded-2xl shadow-xl transform transition-transform hover:scale-105 active:scale-95 text-lg">Resume Warp</button>
-                   <button onClick={handleQuit} className="w-full py-5 bg-slate-800 text-white font-black uppercase rounded-2xl border border-slate-700 hover:bg-slate-700 transition-colors">Sever Connection</button>
+                   <button onClick={() => { setIsMenuOpen(false); setGameState(prev => ({ ...prev, isPaused: false })); }} className="w-full py-5 bg-blue-600 text-white font-black uppercase rounded-2xl shadow-xl transform transition-transform hover:scale-105 active:scale-95 text-lg italic">Resume Warp</button>
+                   <button onClick={handleQuit} className="w-full py-5 bg-slate-800 text-white font-black uppercase rounded-2xl border border-slate-700 hover:bg-slate-700 transition-colors italic">Sever Link</button>
                  </div>
                </div>
              )}
           </main>
-
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} mode="footer" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
         </div>
       )}
