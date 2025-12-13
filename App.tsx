@@ -256,7 +256,8 @@ const App: React.FC = () => {
   const handleRecalibrate = () => {
     soundService.playUI();
     setSearchTimeout(false);
-    syncService.connect();
+    // Explicitly force a reconnection to reset counters
+    syncService.connect(true);
   };
 
   return (

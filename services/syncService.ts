@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_X_ALPHA_300';
+  protocol: 'ZENITH_GATE_STABLE_V400';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -23,7 +23,7 @@ class SyncService {
   private reconnectTimeout: number | null = null;
   private reconnectAttempts: number = 0;
   private connectionLock: boolean = false;
-  private readonly MAX_ATTEMPTS = 8; // Increased for better patience
+  private readonly MAX_ATTEMPTS = 10;
 
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
@@ -53,15 +53,23 @@ class SyncService {
     this.connect();
   }
 
-  connect() {
+  /**
+   * Established a connection to the Rift.
+   * @param force Reset retry counters and force a new attempt.
+   */
+  connect(force: boolean = false) {
     if (this.connectionLock || !this.matchId) return;
     
+    // If we're already in error or forced, reset the circuit breaker
+    if (force || this.status === 'error') {
+      this.reconnectAttempts = 0;
+    }
+
     this.cleanup();
     this.connectionLock = true;
     this.setStatus('connecting');
 
-    // SocketsBay /demo/ is the only reliable free endpoint. 
-    // Custom sub-folders are often rejected immediately (ReadyState 3).
+    // SocketsBay /demo/ is the most reliable free public endpoint
     const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
@@ -78,24 +86,22 @@ class SyncService {
       this.socket.onmessage = (event) => {
         try {
           const msg: SyncMessage = JSON.parse(event.data);
-          // Strict filtering is REQUIRED on the demo channel
           if (
             msg && 
-            msg.protocol === 'ZENITH_X_ALPHA_300' && 
+            msg.protocol === 'ZENITH_GATE_STABLE_V400' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
             this.onUpdate?.(msg.type, msg.data);
           }
         } catch (e) {
-          // Shared channel noise is expected
+          // Public channel traffic noise
         }
       };
 
-      this.socket.onerror = (err) => {
+      this.socket.onerror = () => {
         console.warn(`[SyncService] Rift Distortion detected.`);
         this.connectionLock = false;
-        // Don't set error immediately unless it's a persistent failure
       };
 
       this.socket.onclose = (event) => {
@@ -109,13 +115,15 @@ class SyncService {
             return;
           }
 
-          // Jittered linear backoff
-          const delay = 1500 + (this.reconnectAttempts * 1000) + (Math.random() * 500);
+          // Backoff with randomized jitter to avoid thunderous herd
+          const delay = 1000 + (this.reconnectAttempts * 1000) + (Math.random() * 1000);
           this.reconnectAttempts++;
           
           if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
           this.reconnectTimeout = window.setTimeout(() => {
-            if (this.matchId && this.status !== 'disconnected') this.connect();
+            if (this.matchId && this.status !== 'disconnected') {
+              this.connect();
+            }
           }, delay);
         }
       };
@@ -171,7 +179,7 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_X_ALPHA_300'
+      protocol: 'ZENITH_GATE_STABLE_V400'
     };
 
     try {
