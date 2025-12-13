@@ -11,6 +11,7 @@ import { getTacticalAdvice } from './services/geminiService';
 
 const App: React.FC = () => {
   const [isWarping, setIsWarping] = useState(false);
+  const [isLockingIn, setIsLockingIn] = useState(false);
   const [copied, setCopied] = useState(false);
   const [connStatus, setConnStatus] = useState<ConnectionStatus>('disconnected');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -75,7 +76,6 @@ const App: React.FC = () => {
   }, [matchInput]);
 
   useEffect(() => {
-    // Faster timeout (4s) to show the solo fallback if multiplayer is lagging
     if (gameState.phase === 'lobby' && (connStatus === 'connecting' || connStatus === 'disconnected' || connStatus === 'error')) {
       const timer = setTimeout(() => setSearchTimeout(true), 4000);
       return () => clearTimeout(timer);
@@ -147,11 +147,11 @@ const App: React.FC = () => {
           setGameState(prev => ({ ...prev, remoteReady: data.isReady }));
           break;
         case 'START_GAME':
-          setGameState(prev => ({ ...prev, phase: 'battle', countdown: 1200 }));
+          if (gameState.localSelectedChar) initiateBattle(gameState.localSelectedChar);
           break;
       }
     };
-  }, []);
+  }, [gameState.localSelectedChar]);
 
   useEffect(() => {
     if (gameState.matchId && (gameState.phase === 'lobby' || gameState.phase === 'prep')) {
@@ -191,21 +191,30 @@ const App: React.FC = () => {
   };
 
   const toggleReady = async () => {
+    if (isLockingIn) return;
+    setIsLockingIn(true);
     const newReady = !gameState.localReady;
-    soundService.playUI();
+    soundService.playVictory();
+    
     if (gameState.gameMode === 'MULTIPLAYER') syncService.send('READY_STATUS', { isReady: newReady });
     setGameState(prev => ({ ...prev, localReady: newReady }));
 
     if (newReady && (gameState.gameMode === 'SOLO' || gameState.remoteReady)) {
       if (gameState.localSelectedChar) initiateBattle(gameState.localSelectedChar);
+    } else {
+      setTimeout(() => setIsLockingIn(false), 500);
     }
   };
 
   const initiateBattle = async (playerChar: CharacterTemplate) => {
     setIsWarping(true);
+    setIsLockingIn(false);
+    soundService.playDash();
+
     let enemyChar = gameState.remoteSelectedChar || CHARACTERS[0];
     if (gameState.gameMode === 'SOLO') {
-      enemyChar = CHARACTERS.find(c => c.id !== playerChar.id) || CHARACTERS[0];
+      const otherChars = CHARACTERS.filter(c => c.id !== playerChar.id);
+      enemyChar = otherChars[Math.floor(Math.random() * otherChars.length)];
     }
 
     const playerEntity: Entity = {
@@ -241,6 +250,7 @@ const App: React.FC = () => {
   const handleQuit = useCallback(() => {
     syncService.disconnect();
     setIsMenuOpen(false);
+    setIsLockingIn(false);
     setGameState(prev => ({
       ...prev, player: null, enemy: null, winner: null, phase: 'selection', gameMode: 'SOLO', matchId: undefined, remoteSelectedChar: undefined, remoteUsername: undefined, localReady: false, remoteReady: false, localSelectedChar: undefined, isHost: true, isPaused: false
     }));
@@ -256,12 +266,26 @@ const App: React.FC = () => {
   const handleRecalibrate = () => {
     soundService.playUI();
     setSearchTimeout(false);
-    // Explicitly force a reconnection to reset counters
     syncService.connect(true);
   };
 
   return (
-    <div className="relative w-full h-screen bg-slate-950 overflow-hidden flex flex-col">
+    <div className={`relative w-full h-screen bg-slate-950 overflow-hidden flex flex-col ${isWarping ? 'animate-shake' : ''}`}>
+      {/* Warping Overlay */}
+      {isWarping && (
+        <div className="fixed inset-0 z-[999] pointer-events-none flex items-center justify-center overflow-hidden bg-black/40 backdrop-blur-sm">
+          <div className="absolute inset-0 bg-white/10 animate-warp"></div>
+          <div className="w-[800px] h-[800px] border-[16px] border-blue-500/20 rounded-full animate-portal blur-xl"></div>
+          <div className="w-[600px] h-[600px] border-[8px] border-white/30 rounded-full animate-portal [animation-delay:0.1s] blur-lg"></div>
+          <div className="w-[400px] h-[400px] border-[4px] border-blue-400/50 rounded-full animate-portal [animation-delay:0.2s] blur-md"></div>
+          <div className="absolute inset-0 bg-gradient-to-tr from-blue-600/30 via-transparent to-purple-600/30"></div>
+          <div className="flex flex-col items-center gap-4 z-10">
+            <div className="text-white font-black text-6xl italic tracking-tighter uppercase animate-pulse drop-shadow-[0_0_20px_rgba(255,255,255,0.5)]">Warping...</div>
+            <div className="text-blue-400 font-mono text-[10px] tracking-[1em] uppercase animate-pulse">Synchronizing Multiverse</div>
+          </div>
+        </div>
+      )}
+
       {gameState.phase === 'selection' && (
         <div className="flex-1 flex flex-col items-center justify-center gap-6 animate-fade-in w-full max-w-4xl p-6 mx-auto overflow-y-auto">
           <div className="text-center space-y-2 shrink-0">
@@ -368,25 +392,41 @@ const App: React.FC = () => {
             <CharacterSelect characters={CHARACTERS} onSelect={(c) => { 
               if (gameState.gameMode === 'MULTIPLAYER') syncService.send('CHAR_SELECT', { charId: c.id });
               setGameState(prev => ({ ...prev, localSelectedChar: c }));
-            }} isWarping={false} selectedId={gameState.localSelectedChar?.id} remoteId={gameState.remoteSelectedChar?.id} />
+            }} isWarping={isWarping} selectedId={gameState.localSelectedChar?.id} remoteId={gameState.remoteSelectedChar?.id} />
             <div className="flex flex-col gap-6">
               <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl space-y-4">
                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Arena Sector</span>
                  <div className="flex flex-col gap-2">
                     {ARENAS.map(a => (
-                      <button key={a.id} disabled={!gameState.isHost} onClick={() => {
+                      <button key={a.id} disabled={!gameState.isHost || isWarping} onClick={() => {
                         if (gameState.gameMode === 'MULTIPLAYER') syncService.send('ARENA_SELECT', { arenaId: a.id });
                         setGameState(prev => ({ ...prev, selectedArenaId: a.id }));
-                      }} className={`w-full px-4 py-3 rounded-xl text-left text-xs font-black uppercase border transition-all ${gameState.selectedArenaId === a.id ? 'bg-blue-600 border-blue-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-500'}`}>
+                      }} className={`w-full px-4 py-3 rounded-xl text-left text-xs font-black uppercase border transition-all ${gameState.selectedArenaId === a.id ? 'bg-blue-600 border-blue-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-500 disabled:opacity-50'}`}>
                         {a.name}
                       </button>
                     ))}
                  </div>
               </div>
-              <button onClick={toggleReady} disabled={!gameState.localSelectedChar} className={`w-full py-6 rounded-3xl font-black uppercase italic text-xl transition-all transform active:scale-95 ${gameState.localReady ? 'bg-green-600 shadow-[0_0_20px_rgba(22,163,74,0.4)]' : 'bg-blue-600 hover:bg-blue-500 shadow-xl'} text-white`}>
-                {gameState.localReady ? 'READY!' : 'LOCK IN'}
+              <button 
+                onClick={toggleReady} 
+                disabled={!gameState.localSelectedChar || isWarping || isLockingIn} 
+                className={`w-full py-6 rounded-3xl font-black uppercase italic text-xl transition-all transform active:scale-95 flex items-center justify-center gap-4 ${isLockingIn ? 'bg-white text-blue-600 scale-95' : gameState.localReady ? 'bg-green-600 shadow-[0_0_30px_rgba(22,163,74,0.6)] animate-pulse' : 'bg-blue-600 hover:bg-blue-500 shadow-xl'} text-white disabled:opacity-50`}
+              >
+                {isLockingIn ? (
+                   <i className="fa-solid fa-circle-notch animate-spin"></i>
+                ) : gameState.localReady ? (
+                  <>
+                    <i className="fa-solid fa-check-double"></i>
+                    <span>WARP READY</span>
+                  </>
+                ) : (
+                  <>
+                    <i className="fa-solid fa-lock"></i>
+                    <span>LOCK IN</span>
+                  </>
+                )}
               </button>
-              <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] text-center tracking-widest transition-colors">Sever Singularity Link</button>
+              <button onClick={handleQuit} disabled={isWarping} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] text-center tracking-widest transition-colors disabled:opacity-20">Sever Singularity Link</button>
             </div>
           </div>
         </div>

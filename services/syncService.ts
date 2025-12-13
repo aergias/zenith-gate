@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_V7_STABLE';
+  protocol: 'ZENITH_V8_STABLE'; // Bumped protocol version
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -23,14 +23,13 @@ class SyncService {
   private reconnectTimeout: number | null = null;
   private reconnectAttempts: number = 0;
   private connectionLock: boolean = false;
-  private readonly MAX_ATTEMPTS = 20; // Increased for higher stability
+  private readonly MAX_ATTEMPTS = 100; // Increased significantly for public relay stability
 
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
     console.log(`[SyncService] Rift Signal: ${newStatus.toUpperCase()}`);
     if (this.onStatusChange) {
-      // Use requestAnimationFrame to ensure we don't block the UI thread during status flips
       requestAnimationFrame(() => this.onStatusChange?.(newStatus));
     }
   }
@@ -44,6 +43,7 @@ class SyncService {
       statusCallback(this.status);
     }
 
+    // If we're already connected to this match, don't restart
     if (this.socket && this.socket.readyState === WebSocket.OPEN && this.matchId === matchId) {
       this.setStatus('connected');
       return;
@@ -67,7 +67,7 @@ class SyncService {
     this.connectionLock = true;
     this.setStatus('connecting');
 
-    // Using SocketsBay demo channel - ensures maximum availability
+    // SocketsBay demo channel - common public relay
     const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
@@ -84,22 +84,21 @@ class SyncService {
       this.socket.onmessage = (event) => {
         try {
           const msg: SyncMessage = JSON.parse(event.data);
-          // Strict protocol filtering to ignore noise on the demo channel
           if (
             msg && 
-            msg.protocol === 'ZENITH_V7_STABLE' && 
+            msg.protocol === 'ZENITH_V8_STABLE' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
             this.onUpdate?.(msg.type, msg.data);
           }
         } catch (e) {
-          // Public relay noise is expected
+          // Noise on public channel is expected
         }
       };
 
       this.socket.onerror = (err) => {
-        console.warn(`[SyncService] Rift Distortion detected.`);
+        console.warn(`[SyncService] Rift Distortion.`);
         this.connectionLock = false;
       };
 
@@ -115,8 +114,7 @@ class SyncService {
             return;
           }
 
-          // Jittered linear backoff for fairer reconnection
-          const delay = 1000 + (this.reconnectAttempts * 1000) + (Math.random() * 500);
+          const delay = Math.min(1000 + (this.reconnectAttempts * 1000) + (Math.random() * 1000), 10000);
           this.reconnectAttempts++;
           
           if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
@@ -179,7 +177,7 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_V7_STABLE'
+      protocol: 'ZENITH_V8_STABLE'
     };
 
     try {

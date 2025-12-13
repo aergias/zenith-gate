@@ -21,6 +21,10 @@ const HUD: React.FC<Props> = ({ player, enemy, isPaused, tacticalAdvice, matchId
     setIsMuted(newState);
   };
 
+  const getGradient = (color: string) => {
+    return `linear-gradient(90deg, ${color} 0%, ${color}CC 100%)`;
+  };
+
   if (mode === 'header') {
     return (
       <header className="w-full h-16 bg-slate-900 border-b border-slate-800 px-6 flex items-center justify-between z-50 shrink-0">
@@ -32,10 +36,19 @@ const HUD: React.FC<Props> = ({ player, enemy, isPaused, tacticalAdvice, matchId
         <div className="flex flex-col items-center flex-1 max-w-sm px-8">
            <div className="flex justify-between w-full mb-1">
               <span className="font-black text-[10px] text-white uppercase italic tracking-wider truncate max-w-[120px]">{remoteName || enemy.template.name}</span>
-              <span className="font-bold text-[10px] text-red-500 shrink-0">{Math.ceil(Math.max(0, enemy.stats.hp))} HP</span>
+              <span className="font-bold text-[10px] shrink-0" style={{ color: enemy.template.color }}>{Math.ceil(Math.max(0, enemy.stats.hp))} HP</span>
            </div>
-           <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800 shadow-inner">
-             <div className="h-full transition-all duration-300 shadow-[0_0_10px_rgba(255,255,255,0.1)]" style={{ width: `${(enemy.stats.hp / enemy.stats.maxHp) * 100}%`, backgroundColor: enemy.template.color }} />
+           <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800 shadow-inner relative">
+             <div 
+                className="h-full transition-all duration-300 relative" 
+                style={{ 
+                  width: `${(enemy.stats.hp / enemy.stats.maxHp) * 100}%`, 
+                  background: getGradient(enemy.template.color),
+                  boxShadow: `0 0 10px ${enemy.template.color}66`
+                }} 
+             >
+               <div className="absolute inset-0 bg-white/10 animate-pulse"></div>
+             </div>
            </div>
         </div>
 
@@ -56,8 +69,17 @@ const HUD: React.FC<Props> = ({ player, enemy, isPaused, tacticalAdvice, matchId
           <span className="font-black text-xs text-white uppercase italic tracking-widest truncate">{localName}</span>
           <span className="text-white font-black text-[10px] font-mono">{Math.ceil(Math.max(0, player.stats.hp))} / {player.stats.maxHp}</span>
         </div>
-        <div className="h-4 bg-slate-950 rounded-full overflow-hidden border border-slate-800 mb-1 shadow-inner">
-          <div className="h-full transition-all duration-300 shadow-[0_0_15px_rgba(255,255,255,0.2)]" style={{ width: `${(player.stats.hp / player.stats.maxHp) * 100}%`, backgroundColor: player.template.color }} />
+        <div className="h-4 bg-slate-950 rounded-full overflow-hidden border border-slate-800 mb-1 shadow-inner relative">
+          <div 
+            className="h-full transition-all duration-300 relative" 
+            style={{ 
+              width: `${(player.stats.hp / player.stats.maxHp) * 100}%`, 
+              background: getGradient(player.template.color),
+              boxShadow: `0 0 15px ${player.template.color}88`
+            }} 
+          >
+            <div className="absolute inset-0 bg-white/10 animate-pulse"></div>
+          </div>
         </div>
         <div className="h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800 shadow-inner">
           <div className="h-full bg-blue-500 transition-all duration-300 shadow-[0_0_10px_rgba(59,130,246,0.3)]" style={{ width: `${(player.stats.mana / player.stats.maxMana) * 100}%` }} />
@@ -66,7 +88,11 @@ const HUD: React.FC<Props> = ({ player, enemy, isPaused, tacticalAdvice, matchId
 
       <div className="flex gap-4 px-6 items-center">
         {player.template.abilities.map(ability => (
-          <div key={ability.id} className={`relative w-16 h-16 bg-slate-950 border-2 rounded-2xl flex flex-col items-center justify-center transition-all overflow-hidden group ${ability.currentCooldown > 0 ? 'border-slate-800 opacity-60 scale-95' : 'border-blue-600 hover:border-blue-400 cursor-pointer shadow-[0_0_20px_rgba(37,99,235,0.15)] hover:shadow-[0_0_30px_rgba(37,99,235,0.3)]'}`}>
+          <div 
+            key={ability.id} 
+            className={`relative w-16 h-16 bg-slate-950 border-2 rounded-2xl flex flex-col items-center justify-center transition-all overflow-hidden group ${ability.currentCooldown > 0 ? 'border-slate-800 opacity-60 scale-95' : 'hover:border-white cursor-pointer shadow-lg hover:shadow-2xl'}`}
+            style={{ borderColor: ability.currentCooldown > 0 ? undefined : ability.color }}
+          >
             <span className="text-2xl group-hover:scale-110 transition-transform">{ability.icon}</span>
             <div className="absolute top-0.5 left-1.5 w-3 h-3 flex items-center justify-center text-[8px] font-black text-slate-500 uppercase">{ability.id}</div>
             {ability.currentCooldown > 0 && (
@@ -74,8 +100,8 @@ const HUD: React.FC<Props> = ({ player, enemy, isPaused, tacticalAdvice, matchId
                 {Math.ceil(ability.currentCooldown / 1000)}
               </div>
             )}
-            <div className="absolute bottom-0 left-0 right-0 h-1 bg-blue-900/40">
-               <div className="h-full bg-blue-500 transition-all duration-100" style={{ width: `${(1 - (ability.currentCooldown / ability.cooldown)) * 100}%` }}></div>
+            <div className="absolute bottom-0 left-0 right-0 h-1 bg-slate-800">
+               <div className="h-full transition-all duration-100" style={{ width: `${(1 - (ability.currentCooldown / ability.cooldown)) * 100}%`, backgroundColor: ability.color }}></div>
             </div>
           </div>
         ))}
