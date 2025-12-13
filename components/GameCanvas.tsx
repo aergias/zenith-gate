@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect, useCallback } from 'react';
 import { GameState, AbilityKey, Projectile, Entity, Ability, Zone, VFX, StatusType, StatusEffect, Obstacle } from '../types';
 import { ARENA_WIDTH, ARENA_HEIGHT } from '../constants';
@@ -274,7 +273,7 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
             const isRanged = ent.template.modelType === 'ranger' || ent.template.modelType === 'mage';
             
             if (isRanged) {
-              // Fire basic projectile
+              // Fire basic projectile - Color matched to character
               const angle = Math.atan2(other.y - ent.y, other.x - ent.x);
               projectiles.push({
                 id: Math.random().toString(),
@@ -285,7 +284,7 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
                 radius: 6,
                 damage: ent.stats.baseAttackDamage,
                 ownerId: ent.id,
-                color: ent.template.accentColor || '#ffffff',
+                color: ent.template.color || '#ffffff',
                 life: ent.stats.attackRange / 1200
               });
               ent.attackTimer = 1000 / ent.stats.attackSpeed;
