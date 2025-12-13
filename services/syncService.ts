@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_GATE_V6_FINAL';
+  protocol: 'ZENITH_FINAL_STABLE_V8';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -24,7 +24,6 @@ class SyncService {
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
-    console.log(`[SyncService] Connection State: ${newStatus}`);
     if (this.onStatusChange) this.onStatusChange(newStatus);
   }
 
@@ -56,8 +55,8 @@ class SyncService {
     }
 
     this.setStatus('connecting');
-    // Using a more reliable demo endpoint with explicit protocol matching
-    const relayUrl = `wss://free.piesocket.com/v3/demo?api_key=VCXPI9geS8Z986p8U7vXVtYfFl7uS9v7f9D5Okh1&notify_self=0`;
+    // Using SocketsBay demo channel - high reliability for prototypes
+    const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
       this.socket = new WebSocket(relayUrl);
@@ -72,27 +71,21 @@ class SyncService {
           const msg: SyncMessage = JSON.parse(event.data);
           if (
             msg && 
-            msg.protocol === 'ZENITH_GATE_V6_FINAL' && 
+            msg.protocol === 'ZENITH_FINAL_STABLE_V8' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
             if (this.onUpdate) this.onUpdate(msg.type, msg.data);
           }
-        } catch (e) {
-          // Ignore parse errors from other users on the public demo channel
-        }
+        } catch (e) {}
       };
 
-      this.socket.onerror = (err) => {
-        console.error('[SyncService] Socket Error', err);
-        this.setStatus('error');
-      };
-
+      this.socket.onerror = () => this.setStatus('error');
       this.socket.onclose = () => {
         if (this.status !== 'disconnected') {
           setTimeout(() => {
             if (this.matchId) this.connect();
-          }, 3000);
+          }, 2000);
         }
       };
     } catch (err) {
@@ -118,14 +111,12 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_GATE_V6_FINAL'
+      protocol: 'ZENITH_FINAL_STABLE_V8'
     };
 
     try {
       this.socket.send(JSON.stringify(payload));
-    } catch (err) {
-      console.warn('[SyncService] Failed to send message:', err);
-    }
+    } catch (err) {}
   }
 
   disconnect() {

@@ -12,7 +12,6 @@ import { getTacticalAdvice } from './services/geminiService';
 const App: React.FC = () => {
   const [isWarping, setIsWarping] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [detectedSignal, setDetectedSignal] = useState<string | null>(null);
   const [connStatus, setConnStatus] = useState<ConnectionStatus>('disconnected');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   
@@ -48,7 +47,7 @@ const App: React.FC = () => {
     localUsernameRef.current = gameState.localUsername;
   }, [gameState.localUsername]);
 
-  // Handle ESC Key for menu
+  // Restored: ESC Key Listener for Battle Phase
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -65,7 +64,7 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [gameState.phase]);
 
-  // Handle incoming socket messages
+  // Multi-step Discovery Logic
   useEffect(() => {
     syncUpdateRef.current = (type: string, data: any) => {
       switch (type) {
@@ -101,7 +100,6 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Sync Connection & Active Handshake Loop
   useEffect(() => {
     if (gameState.matchId && (gameState.phase === 'lobby' || gameState.phase === 'prep')) {
       syncService.subscribe(
@@ -110,7 +108,6 @@ const App: React.FC = () => {
         (status) => setConnStatus(status)
       );
 
-      // Discovery Pulse: Aggressively seek partner until synchronized
       const interval = window.setInterval(() => {
         if (syncService.getStatus() === 'connected' && !gameState.remoteUsername) {
           syncService.send('DISCOVERY', { 
@@ -118,7 +115,7 @@ const App: React.FC = () => {
             clientId: syncService.getClientId() 
           });
         }
-      }, 1500);
+      }, 1000);
 
       return () => clearInterval(interval);
     }
@@ -315,11 +312,12 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* FIXED: Strict grid layout for Battle phase ensures HUD visibility */}
       {gameState.phase === 'battle' && gameState.player && gameState.enemy && (
-        <div className="h-screen w-full flex flex-col relative overflow-hidden">
+        <div className="h-screen w-full grid grid-rows-[auto_1fr_auto] relative overflow-hidden">
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} matchId={gameState.matchId} mode="header" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
           
-          <main className="flex-1 relative bg-slate-950 overflow-hidden game-canvas-container flex items-center justify-center min-h-0">
+          <main className="relative bg-slate-950 overflow-hidden game-canvas-container flex items-center justify-center min-h-0">
              <GameCanvas gameState={gameState} setGameState={setGameState} onGameOver={handleGameOver} />
              
              {isMenuOpen && (
