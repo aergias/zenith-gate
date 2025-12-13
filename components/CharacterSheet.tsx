@@ -16,8 +16,8 @@ const CharacterSheet: React.FC<Props> = ({ character, isWarping, onClose, onSele
         {/* Header Section */}
         <div className="flex items-center justify-between p-8 bg-slate-800/30 border-b border-slate-800">
            <div className="flex flex-col">
-              <h2 className="text-5xl font-black text-white uppercase italic tracking-tighter leading-none">{character.name}</h2>
-              <p className="text-blue-400 font-bold uppercase tracking-[0.4em] text-xs mt-2">{character.role}</p>
+              <h2 className="text-5xl font-black text-white uppercase italic tracking-tighter leading-none" style={{ color: character.color }}>{character.name}</h2>
+              <p className="font-bold uppercase tracking-[0.4em] text-xs mt-2" style={{ color: character.accentColor }}>{character.role}</p>
            </div>
            <button 
              disabled={isWarping}
@@ -33,12 +33,12 @@ const CharacterSheet: React.FC<Props> = ({ character, isWarping, onClose, onSele
           
           {/* Column 1: Identity & Bio */}
           <div className="w-1/4 border-r border-slate-800 p-8 flex flex-col gap-6">
-            <div className="aspect-square rounded-3xl overflow-hidden border-2 border-slate-800 shadow-inner">
+            <div className="aspect-square rounded-3xl overflow-hidden border-2 border-slate-800 shadow-inner" style={{ borderColor: character.color }}>
                <img src={character.avatar} className="w-full h-full object-cover" alt={character.name} />
             </div>
             <div className="space-y-3">
                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                 <i className="fa-solid fa-fingerprint text-blue-500"></i> Identity Trace
+                 <i className="fa-solid fa-fingerprint" style={{ color: character.color }}></i> Identity Trace
                </span>
                <p className="text-slate-300 text-xs leading-relaxed italic opacity-80">
                  {character.bio}
@@ -49,11 +49,11 @@ const CharacterSheet: React.FC<Props> = ({ character, isWarping, onClose, onSele
           {/* Column 2: Tactical Data (Stats) */}
           <div className="w-1/4 border-r border-slate-800 p-8 flex flex-col gap-6 bg-slate-950/20">
              <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
-               <i className="fa-solid fa-chart-simple text-blue-500"></i> Combat Matrix
+               <i className="fa-solid fa-chart-simple" style={{ color: character.color }}></i> Combat Matrix
              </span>
              
              <div className="space-y-5">
-                <StatRow label="Resilience" value={character.stats.maxHp} color="bg-green-500" max={1600} icon="fa-heart" />
+                <StatRow label="Resilience" value={character.stats.maxHp} overrideColor={character.color} max={1600} icon="fa-heart" />
                 <StatRow label="Gate Capacity" value={character.stats.maxMana} color="bg-blue-500" max={600} icon="fa-bolt" />
                 <StatRow label="Warp Velocity" value={character.stats.speed} color="bg-cyan-400" max={1000} icon="fa-wind" />
                 <StatRow label="Impact Force" value={character.stats.baseAttackDamage} color="bg-red-500" max={100} icon="fa-burst" />
@@ -78,7 +78,7 @@ const CharacterSheet: React.FC<Props> = ({ character, isWarping, onClose, onSele
           {/* Column 3: Singularity Skills (Abilities) */}
           <div className="flex-1 p-8 overflow-hidden flex flex-col">
              <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-6">
-               <i className="fa-solid fa-microchip text-blue-500"></i> Ability Manifest
+               <i className="fa-solid fa-microchip" style={{ color: character.color }}></i> Ability Manifest
              </span>
              
              <div className="grid grid-cols-2 gap-4">
@@ -90,7 +90,7 @@ const CharacterSheet: React.FC<Props> = ({ character, isWarping, onClose, onSele
                     <div className="flex flex-col justify-center overflow-hidden">
                        <div className="flex items-center gap-2 mb-1">
                           <span className="font-black text-white text-xs uppercase italic">{ability.name}</span>
-                          <span className="bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded text-[8px] font-black uppercase">{ability.id}</span>
+                          <span className="bg-slate-700 text-white px-1.5 py-0.5 rounded text-[8px] font-black uppercase">{ability.id}</span>
                        </div>
                        <p className="text-slate-400 text-[10px] leading-tight line-clamp-2">
                          {ability.description}
@@ -112,7 +112,8 @@ const CharacterSheet: React.FC<Props> = ({ character, isWarping, onClose, onSele
                 <button 
                   disabled={isWarping}
                   onClick={() => onSelect(character)}
-                  className={`flex-1 py-5 font-black uppercase italic tracking-tighter text-lg rounded-2xl transition-all shadow-2xl flex items-center justify-center gap-4 ${isWarping ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20 transform hover:-translate-y-1'}`}
+                  className={`flex-1 py-5 font-black uppercase italic tracking-tighter text-lg rounded-2xl transition-all shadow-2xl flex items-center justify-center gap-4 ${isWarping ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'hover:brightness-110 text-white transform hover:-translate-y-1'}`}
+                  style={{ backgroundColor: character.color }}
                 >
                   {isWarping ? (
                     <>
@@ -135,7 +136,7 @@ const CharacterSheet: React.FC<Props> = ({ character, isWarping, onClose, onSele
   );
 };
 
-const StatRow = ({ label, value, color, max, icon }: { label: string, value: number, color: string, max: number, icon: string }) => (
+const StatRow = ({ label, value, color, max, icon, overrideColor }: { label: string, value: number, color?: string, max: number, icon: string, overrideColor?: string }) => (
   <div className="flex flex-col gap-2">
     <div className="flex justify-between text-[10px] text-slate-500 uppercase font-black">
       <div className="flex items-center gap-2">
@@ -145,7 +146,7 @@ const StatRow = ({ label, value, color, max, icon }: { label: string, value: num
       <span className="text-white">{value}</span>
     </div>
     <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800 p-[1px]">
-      <div className={`${color} h-full rounded-full transition-all duration-1000 shadow-[0_0_8px_rgba(255,255,255,0.1)]`} style={{ width: `${(value / max) * 100}%` }} />
+      <div className={`${color || ''} h-full rounded-full transition-all duration-1000 shadow-[0_0_8px_rgba(255,255,255,0.1)]`} style={{ width: `${(value / max) * 100}%`, backgroundColor: overrideColor }} />
     </div>
   </div>
 );
