@@ -44,7 +44,9 @@ const App: React.FC = () => {
   const syncIntervalRef = useRef<number | null>(null);
 
   // Connection Diagnostics
-  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.includes('stackblitz');
+  const isLocalhost = window.location.hostname === 'localhost' || 
+                      window.location.hostname === '127.0.0.1' || 
+                      window.location.hostname.includes('stackblitz');
 
   // Global Escape Key Listener for Pausing
   useEffect(() => {
@@ -141,14 +143,14 @@ const App: React.FC = () => {
     handleStartGame('MULTIPLAYER', newId);
   }, [handleStartGame]);
 
-  // Modified Hash Check: Don't auto-join, just pre-fill
+  // Ensure we stay on selection phase even if hash is present
   useEffect(() => {
     const checkHash = () => {
       const hash = window.location.hash.substring(1);
       const params = new URLSearchParams(hash);
       const matchIdFromUrl = params.get('matchId');
+      
       if (matchIdFromUrl && gameState.phase === 'selection') {
-        console.log("Detected Incoming Signal:", matchIdFromUrl);
         setMatchInput(matchIdFromUrl);
         setDetectedSignal(matchIdFromUrl);
       }
@@ -163,9 +165,8 @@ const App: React.FC = () => {
   }, [gameState.phase]);
 
   const getBasePortalUrl = () => {
-    // Highly robust base URL extraction to prevent 404s
-    const url = window.location.origin + window.location.pathname;
-    return url.endsWith('/') ? url : url + '/';
+    // Ensures a clean URL without hashes or trailing garbage
+    return window.location.origin + window.location.pathname;
   };
 
   const copyPortalUrl = () => {
@@ -294,43 +295,30 @@ const App: React.FC = () => {
             <h1 className="text-7xl font-black text-white tracking-tighter uppercase italic text-center drop-shadow-[0_0_20px_rgba(255,255,255,0.1)]">
               ZENITH <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">GATE</span>
             </h1>
-            <p className="text-blue-400 font-mono text-[10px] uppercase tracking-[0.6em]">Universal Dueling Arena</p>
+            <p className="text-blue-400 font-mono text-[10px] uppercase tracking-[0.6em]">Arena of the Infinite</p>
           </div>
 
           <div className="bg-slate-900/50 backdrop-blur-xl p-8 rounded-[32px] border border-slate-700 w-full flex flex-col gap-6 shadow-2xl relative">
             
-            {/* Hosting Environment Alert */}
-            {isLocalhost && (
-              <div className="bg-amber-950/40 border border-amber-500/30 p-4 rounded-2xl flex items-center gap-4">
-                <div className="w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0">
-                   <i className="fa-solid fa-satellite text-amber-500"></i>
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-amber-400 text-[10px] font-black uppercase tracking-widest">Local Sector Detected</span>
-                  <p className="text-white text-[10px] leading-tight opacity-70">A friend cannot reach this link while you are in a "Preview" or "Localhost" mode. Host this app on Vercel or Netlify for multiplayer.</p>
-                </div>
-              </div>
-            )}
-
             <div className="space-y-2">
-              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Warrior Identity</label>
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Identity Confirmation</label>
               <input 
                 type="text" 
                 value={gameState.localUsername} 
                 onChange={(e) => setGameState(prev => ({ ...prev, localUsername: e.target.value.substring(0, 15) }))} 
                 className="w-full bg-slate-950 border border-slate-800 text-white px-6 py-4 rounded-2xl outline-none focus:border-blue-500 transition-colors font-bold text-lg shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)]"
-                placeholder="Enter Username..."
+                placeholder="Name your warrior..."
               />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <button onClick={() => handleStartGame('SOLO')} className="group flex flex-col items-center gap-4 p-8 bg-slate-800/30 border border-slate-700 hover:border-blue-500 rounded-[32px] transition-all hover:bg-slate-800/50">
                 <div className="w-16 h-16 bg-blue-600/10 rounded-full flex items-center justify-center border border-blue-500/20 group-hover:scale-110 transition-transform">
-                  <i className="fa-solid fa-user-ninja text-3xl text-blue-400"></i>
+                  <i className="fa-solid fa-user-shield text-3xl text-blue-400"></i>
                 </div>
                 <div className="text-center">
-                  <span className="text-white font-black uppercase tracking-widest text-sm">Solo Protocol</span>
-                  <p className="text-slate-500 text-[9px] font-bold uppercase mt-1">Combat Exercise</p>
+                  <span className="text-white font-black uppercase tracking-widest text-sm">Solo Training</span>
+                  <p className="text-slate-500 text-[9px] font-bold uppercase mt-1">Fight the AI</p>
                 </div>
               </button>
               
@@ -338,7 +326,7 @@ const App: React.FC = () => {
                 <div className={`flex bg-slate-950 border rounded-2xl overflow-hidden transition-all ring-4 ring-transparent p-1 ${detectedSignal ? 'border-purple-500 ring-purple-500/10' : 'border-slate-800 focus-within:border-purple-500 focus-within:ring-purple-500/10'}`}>
                   <input 
                     type="text" 
-                    placeholder="Singularity Code..." 
+                    placeholder="Enter Code..." 
                     className="bg-transparent text-white px-5 py-3 outline-none flex-1 font-mono text-sm uppercase placeholder:text-slate-700 tracking-[0.2em]" 
                     value={matchInput} 
                     onChange={(e) => { setMatchInput(e.target.value); setDetectedSignal(null); }} 
@@ -351,7 +339,7 @@ const App: React.FC = () => {
                 
                 <div className="flex items-center gap-3">
                    <div className="h-[1px] bg-slate-800 flex-1"></div>
-                   <span className="text-slate-700 text-[8px] font-black uppercase tracking-tighter">New Portal</span>
+                   <span className="text-slate-700 text-[8px] font-black uppercase">Host New</span>
                    <div className="h-[1px] bg-slate-800 flex-1"></div>
                 </div>
 
@@ -362,14 +350,10 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Sharing Instructions */}
             <div className="bg-slate-950/50 border border-slate-800 rounded-3xl p-6 flex flex-col gap-4">
                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Multiplayer Link Protocol</span>
-                  <div className="flex items-center gap-1.5">
-                     <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping"></div>
-                     <span className="text-[8px] text-blue-500 font-black uppercase">Live Signal</span>
-                  </div>
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Warp Access Protocols</span>
+                  {isLocalhost && <span className="text-[8px] text-amber-500 font-black uppercase flex items-center gap-1"><i className="fa-solid fa-triangle-exclamation"></i> Preview Mode</span>}
                </div>
                
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -378,8 +362,8 @@ const App: React.FC = () => {
                         <i className={`fa-solid ${urlCopied ? 'fa-check' : 'fa-link'}`}></i>
                      </div>
                      <div className="flex flex-col">
-                        <span className="text-white font-black text-[9px] uppercase">Copy Base Portal</span>
-                        <span className="text-slate-500 text-[8px] uppercase">Friend opens this link first</span>
+                        <span className="text-white font-black text-[9px] uppercase">Base Portal Link</span>
+                        <span className="text-slate-500 text-[8px] uppercase">Safe URL for friends</span>
                      </div>
                   </button>
 
@@ -388,12 +372,14 @@ const App: React.FC = () => {
                         <i className="fa-solid fa-key"></i>
                      </div>
                      <div className="flex flex-col">
-                        <span className="text-white font-black text-[9px] uppercase">Manual Entry</span>
-                        <span className="text-slate-500 text-[8px] uppercase">Tell them your 6-digit code</span>
+                        <span className="text-white font-black text-[9px] uppercase">Code Sharing</span>
+                        <span className="text-slate-500 text-[8px] uppercase">Manual entry method</span>
                      </div>
                   </div>
                </div>
-               <p className="text-center text-slate-600 text-[8px] font-bold uppercase tracking-widest mt-1">If the link gives a 404, send your friend the base URL and code separately.</p>
+               <p className="text-center text-slate-600 text-[8px] font-bold uppercase tracking-widest leading-relaxed">
+                 {isLocalhost ? "You are on a private preview. Links won't work for friends until you deploy to Vercel/Netlify." : "Share the 'Base Portal' link if the direct link gives a 404."}
+               </p>
             </div>
           </div>
         </div>
@@ -412,10 +398,10 @@ const App: React.FC = () => {
                 <div className="flex items-center gap-4 mt-6">
                   <button onClick={copyInviteLink} className={`px-8 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${copied ? 'bg-green-600 text-white' : 'bg-slate-800 text-blue-400 border border-slate-700 hover:bg-slate-700'}`}>
                     <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'} mr-2`}></i>
-                    {copied ? 'Link Copied' : 'Copy Direct Join Link'}
+                    {copied ? 'Link Copied' : 'Copy Direct Warp Link'}
                   </button>
                 </div>
-                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-4 max-w-xs text-center leading-relaxed">If the "Direct Link" 404s, send the "Base Portal URL" from the home screen.</p>
+                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-4 max-w-xs text-center leading-relaxed italic">The direct link uses a hash (#) to stay on the same page.</p>
              </div>
 
              <div className="flex items-center gap-12 w-full justify-center">
