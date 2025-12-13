@@ -75,9 +75,9 @@ const App: React.FC = () => {
   }, [matchInput]);
 
   useEffect(() => {
-    // Show fallback even faster (6 seconds) if the Rift is failing to open
+    // Faster timeout (4s) to show the solo fallback if multiplayer is lagging
     if (gameState.phase === 'lobby' && (connStatus === 'connecting' || connStatus === 'disconnected' || connStatus === 'error')) {
-      const timer = setTimeout(() => setSearchTimeout(true), 6000);
+      const timer = setTimeout(() => setSearchTimeout(true), 4000);
       return () => clearTimeout(timer);
     }
   }, [gameState.phase, connStatus]);
@@ -98,7 +98,7 @@ const App: React.FC = () => {
     window.addEventListener('hashchange', checkHash);
     return () => {
       window.removeEventListener('hashchange', checkHash);
-      syncService.disconnect(); // Hard cleanup on unmount
+      syncService.disconnect();
     };
   }, [gameState.matchId, handleStartGame]);
 
@@ -116,7 +116,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState.phase, handleStartGame]);
+  }, [gameState.phase]);
 
   useEffect(() => {
     syncUpdateRef.current = (type: string, data: any) => {
@@ -247,6 +247,12 @@ const App: React.FC = () => {
     window.location.hash = '';
   }, []);
 
+  const handleSoloWarp = () => {
+    syncService.disconnect();
+    setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep', matchId: undefined }));
+    window.location.hash = '';
+  };
+
   const handleRecalibrate = () => {
     soundService.playUI();
     setSearchTimeout(false);
@@ -273,9 +279,12 @@ const App: React.FC = () => {
               />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <button onClick={() => handleStartGame('SOLO')} className="flex flex-col items-center gap-4 p-8 bg-slate-800/30 border border-slate-700 hover:border-blue-500 rounded-[32px] transition-all group">
-                <i className="fa-solid fa-user-shield text-3xl text-blue-400 group-hover:scale-110 transition-transform"></i>
-                <span className="text-white font-black uppercase tracking-widest text-sm">Solo Training</span>
+              <button onClick={() => handleStartGame('SOLO')} className="flex flex-col items-center gap-4 p-8 bg-blue-600/20 border border-blue-500 hover:bg-blue-600/30 rounded-[32px] transition-all group shadow-[0_0_30px_rgba(37,99,235,0.2)]">
+                <i className="fa-solid fa-user-shield text-4xl text-blue-400 group-hover:scale-110 transition-transform"></i>
+                <div className="flex flex-col items-center">
+                  <span className="text-white font-black uppercase tracking-widest text-base">Solo Training</span>
+                  <span className="text-blue-400/60 text-[8px] font-bold uppercase mt-1 tracking-widest">Offline Capable</span>
+                </div>
               </button>
               <div className="flex flex-col gap-4">
                 <div className="flex bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden p-1 focus-within:border-purple-500 transition-colors shadow-inner">
@@ -297,9 +306,9 @@ const App: React.FC = () => {
            <div className="bg-slate-900/50 p-16 rounded-[40px] border border-slate-700 shadow-2xl w-full flex flex-col items-center gap-10">
              <div className="text-center">
                 <div className="flex items-center gap-3 mb-4 justify-center">
-                   <div className={`w-3 h-3 rounded-full shadow-[0_0_10px] ${connStatus === 'connected' ? 'bg-green-500 shadow-green-500/50' : connStatus === 'error' ? 'bg-red-600' : 'bg-amber-500 animate-pulse'}`} />
+                   <div className={`w-3 h-3 rounded-full shadow-[0_0_10px] ${connStatus === 'connected' ? 'bg-green-500 shadow-green-500/50' : connStatus === 'error' ? 'bg-red-600 shadow-red-500/50' : 'bg-amber-500 animate-pulse'}`} />
                    <span className={`text-[10px] font-black uppercase tracking-widest ${connStatus === 'connected' ? 'text-green-400' : connStatus === 'error' ? 'text-red-500' : 'text-amber-400'}`}>
-                     {connStatus === 'connected' ? 'Gate Synchronized' : connStatus === 'error' ? 'Singularity Rift Blocked' : 'Opening Rift Port...'}
+                     {connStatus === 'connected' ? 'Gate Synchronized' : connStatus === 'error' ? 'Singularity Link Collapsed' : 'Aligning Rift Frequencies...'}
                    </span>
                 </div>
                 <div className="text-7xl font-black text-white font-mono bg-slate-950 px-10 py-6 rounded-3xl border-2 border-slate-800 tracking-[0.2em] shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)]">{gameState.matchId}</div>
@@ -307,16 +316,18 @@ const App: React.FC = () => {
                 {(connStatus === 'error' || searchTimeout || connStatus === 'connecting') && (
                   <div className="flex flex-col items-center gap-3 mt-8 animate-fade-in">
                     <p className={`text-[11px] font-black uppercase tracking-tighter ${connStatus === 'error' ? 'text-red-500' : 'text-amber-500'}`}>
-                      {connStatus === 'error' ? 'Singularity Signal Destabilized' : 'Rift Protocol Throttled'}
+                      {connStatus === 'error' ? 'Rift Signal Terminated' : 'Protocol Synchronization Throttled'}
                     </p>
                     <div className="flex gap-4">
-                      <button onClick={handleRecalibrate} className="px-8 py-3 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-full hover:bg-slate-700 transition-all shadow-lg flex items-center gap-2">
-                        <i className="fa-solid fa-rotate-right"></i>
-                        Recalibrate
-                      </button>
-                      <button onClick={() => { syncService.disconnect(); setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep' })); }} className="px-8 py-3 bg-blue-600 border border-blue-500 text-white text-[10px] font-black uppercase rounded-full hover:bg-blue-500 transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)] flex items-center gap-2">
+                      {connStatus !== 'error' && (
+                        <button onClick={handleRecalibrate} className="px-8 py-4 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-full hover:bg-slate-700 transition-all shadow-lg flex items-center gap-2">
+                          <i className="fa-solid fa-rotate-right"></i>
+                          Recalibrate
+                        </button>
+                      )}
+                      <button onClick={handleSoloWarp} className="px-8 py-4 bg-blue-600 border border-blue-500 text-white text-[10px] font-black uppercase rounded-full hover:bg-blue-500 transition-all shadow-[0_0_25px_rgba(37,99,235,0.4)] flex items-center gap-2">
                         <i className="fa-solid fa-bolt"></i>
-                        Warp Solo
+                        Force Solo Warp
                       </button>
                     </div>
                   </div>

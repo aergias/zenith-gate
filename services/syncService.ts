@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_V200_FINAL';
+  protocol: 'ZENITH_X_ALPHA_300';
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -22,14 +22,15 @@ class SyncService {
   private heartbeatInterval: number | null = null;
   private reconnectTimeout: number | null = null;
   private reconnectAttempts: number = 0;
+  private connectionLock: boolean = false;
+  private readonly MAX_ATTEMPTS = 8; // Increased for better patience
 
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
-    console.log(`[SyncService] Link Status: ${newStatus.toUpperCase()}`);
+    console.log(`[SyncService] Rift Signal: ${newStatus.toUpperCase()}`);
     if (this.onStatusChange) {
-      // Use setTimeout to decouple socket events from React render cycles
-      setTimeout(() => this.onStatusChange?.(newStatus), 0);
+      setTimeout(() => this.onStatusChange?.(newStatus), 10);
     }
   }
 
@@ -53,68 +54,74 @@ class SyncService {
   }
 
   connect() {
+    if (this.connectionLock || !this.matchId) return;
+    
     this.cleanup();
-    
-    if (!this.matchId) return;
-    
+    this.connectionLock = true;
     this.setStatus('connecting');
 
-    // SocketsBay /demo/ is the most reliable endpoint for free tier public prototyping.
-    // Most 'ReadyState 3' errors are caused by invalid paths that the server immediately rejects.
+    // SocketsBay /demo/ is the only reliable free endpoint. 
+    // Custom sub-folders are often rejected immediately (ReadyState 3).
     const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
     
     try {
       this.socket = new WebSocket(relayUrl);
 
       this.socket.onopen = () => {
-        console.log(`[SyncService] Gate Singularity Linked: ${relayUrl}`);
+        console.log(`[SyncService] Rift Harmonic Established: ${relayUrl}`);
         this.setStatus('connected');
         this.reconnectAttempts = 0;
+        this.connectionLock = false;
         this.startHeartbeat();
       };
 
       this.socket.onmessage = (event) => {
         try {
-          // Public demo channel has high noise; we MUST filter strictly
           const msg: SyncMessage = JSON.parse(event.data);
+          // Strict filtering is REQUIRED on the demo channel
           if (
             msg && 
-            msg.protocol === 'ZENITH_V200_FINAL' && 
+            msg.protocol === 'ZENITH_X_ALPHA_300' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
             this.onUpdate?.(msg.type, msg.data);
           }
         } catch (e) {
-          // Silently discard non-JSON or third-party traffic on the shared channel
+          // Shared channel noise is expected
         }
       };
 
       this.socket.onerror = (err) => {
-        const ws = err.target as WebSocket;
-        console.warn(`[SyncService] Transmission Error | State: ${ws?.readyState}`);
-        // If we hit ReadyState 3 (CLOSED) or 2 (CLOSING), we need to trigger reconnect
-        if (this.status !== 'disconnected') {
-          this.setStatus('error');
-        }
+        console.warn(`[SyncService] Rift Distortion detected.`);
+        this.connectionLock = false;
+        // Don't set error immediately unless it's a persistent failure
       };
 
       this.socket.onclose = (event) => {
-        console.warn(`[SyncService] Gate Singularity Closed | Code: ${event.code} | Clean: ${event.wasClean}`);
+        console.warn(`[SyncService] Rift Collapsed | Code: ${event.code} | Attempt: ${this.reconnectAttempts}`);
+        this.connectionLock = false;
         
         if (this.status !== 'disconnected') {
-          // Reconnection with linear backoff (1s, 2s, 3s... cap at 10s)
-          const delay = Math.min(1000 + (this.reconnectAttempts * 1000), 10000);
+          if (this.reconnectAttempts >= this.MAX_ATTEMPTS) {
+            console.error('[SyncService] Max Rift Calibration attempts reached. Circuit broken.');
+            this.setStatus('error');
+            return;
+          }
+
+          // Jittered linear backoff
+          const delay = 1500 + (this.reconnectAttempts * 1000) + (Math.random() * 500);
           this.reconnectAttempts++;
           
           if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
           this.reconnectTimeout = window.setTimeout(() => {
-            if (this.matchId) this.connect();
+            if (this.matchId && this.status !== 'disconnected') this.connect();
           }, delay);
         }
       };
     } catch (err) {
-      console.error('[SyncService] Failed to establish singularity rift:', err);
+      console.error('[SyncService] Rift Initialization Failed:', err);
+      this.connectionLock = false;
       this.setStatus('error');
     }
   }
@@ -123,8 +130,7 @@ class SyncService {
     this.stopHeartbeat();
     this.heartbeatInterval = window.setInterval(() => {
       if (this.socket?.readyState === WebSocket.OPEN) {
-        // Keep-alive to prevent SocketsBay from dropping idle connections
-        this.send('KEEPALIVE', { t: Date.now() });
+        this.send('SYNC_PULSE', { t: Date.now() });
       }
     }, 15000);
   }
@@ -143,7 +149,6 @@ class SyncService {
       this.reconnectTimeout = null;
     }
     if (this.socket) {
-      // Clear listeners to prevent recursion/leaks
       this.socket.onopen = null;
       this.socket.onmessage = null;
       this.socket.onerror = null;
@@ -166,13 +171,13 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_V200_FINAL'
+      protocol: 'ZENITH_X_ALPHA_300'
     };
 
     try {
       this.socket.send(JSON.stringify(payload));
     } catch (err) {
-      console.warn('[SyncService] Packet loss during rift burst:', err);
+      console.warn('[SyncService] Packet loss in Rift stream.');
     }
   }
 
@@ -180,6 +185,7 @@ class SyncService {
     this.setStatus('disconnected');
     this.cleanup();
     this.matchId = null;
+    this.connectionLock = false;
   }
 
   getClientId() { return this.clientId; }
