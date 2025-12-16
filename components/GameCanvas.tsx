@@ -1,34 +1,54 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { GameState, AbilityKey, Projectile, Entity, Zone, VFX, StatusType, StatusEffect, Obstacle, Ability } from '../types';
+import { GameState, AbilityKey, Projectile, Entity, Zone, VFX, StatusType, StatusEffect, Obstacle, Ability, NetworkMessage } from '../types';
 import { ARENA_WIDTH, ARENA_HEIGHT } from '../constants';
 import { soundService } from '../services/soundService';
+import { DataConnection } from 'peerjs';
 
 interface Props {
   gameState: GameState;
   setGameState: React.Dispatch<React.SetStateAction<GameState>>;
   onGameOver: (winner: 'player' | 'enemy' | 'Player1' | 'Player2') => void;
+  connection: DataConnection | null;
 }
 
-const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) => {
+const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, connection }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(0);
   const lastUpdateRef = useRef<number>(performance.now());
   const mousePosRef = useRef({ x: 0, y: 0 });
   const isGameOverRef = useRef(false);
+  const syncTimerRef = useRef(0);
   
-  // High-performance Simulation Ref (Bypasses React State for calculation)
   const simRef = useRef<GameState>(gameState);
   
   // AI Tactical State
   const aiTickRef = useRef(0);
   const aiStateRef = useRef<'NEUTRAL' | 'AGGRESSIVE' | 'DEFENSIVE' | 'PANIC' | 'EVADE'>('NEUTRAL');
-  const aiDodgeDirRef = useRef({ x: 0, y: 0 });
   const aiReactionTicksRef = useRef(0);
 
-  // Sync React state to Simulation Ref for external changes (like character selection/reset)
   useEffect(() => {
     simRef.current = gameState;
   }, [gameState.phase, gameState.player?.template.id, gameState.enemy?.template.id]);
+
+  // Handle incoming commands on the host side
+  useEffect(() => {
+    if (gameState.isHost && connection) {
+      const handleData = (data: any) => {
+        const msg = data as NetworkMessage;
+        if (msg.type === 'battle_input') {
+          const s = simRef.current;
+          if (msg.payload.action === 'move' && s.enemy) {
+            s.enemy.targetX = msg.payload.x;
+            s.enemy.targetY = msg.payload.y;
+          } else if (msg.payload.action === 'cast' && msg.payload.abilityId) {
+            castAbility('enemy', msg.payload.abilityId, msg.payload.x, msg.payload.y);
+          }
+        }
+      };
+      connection.on('data', handleData);
+      return () => { connection.off('data', handleData); };
+    }
+  }, [gameState.isHost, connection]);
 
   const checkWallCollision = (x: number, y: number, radius: number, obstacles: Obstacle[]) => {
     const r = radius + 2;
@@ -49,25 +69,20 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
       if (shieldVal >= amount) {
         shield.value = shieldVal - amount;
         vfx.push({ id: Math.random().toString(), x: ent.x, y: ent.y, type: 'impact', color: '#FFD700', radius: 40, timer: 200, maxTimer: 200 });
-        soundService.playImpact();
         return ent;
       } else {
         const remaining = amount - shieldVal;
         ent.buffs.splice(shieldIndex, 1);
         ent.stats.hp -= remaining;
-        soundService.playImpact();
-        vfx.push({ id: Math.random().toString(), x: ent.x, y: ent.y, type: 'shatter', color: '#FFD700', radius: 70, timer: 500, maxTimer: 500 });
       }
     } else {
       ent.stats.hp -= amount;
-      soundService.playImpact();
     }
     return ent;
   };
 
   const applyStatus = (ent: Entity, effect: StatusEffect): Entity => {
     if (ent.stats.hp <= 0) return ent;
-    soundService.playStatusApply();
     const existingIndex = ent.buffs.findIndex(b => b.type === effect.type);
     if (existingIndex !== -1) {
       const existing = ent.buffs[existingIndex];
@@ -82,7 +97,7 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
 
   const castAbility = useCallback((ownerId: 'player' | 'enemy', abilityId: AbilityKey, tx: number, ty: number) => {
     const s = simRef.current;
-    if (s.phase !== 'battle' || s.countdown > 0 || s.isPaused || isGameOverRef.current) return;
+    if (s.phase !== 'battle' || s.countdown > 0 || isGameOverRef.current) return;
     
     const caster = ownerId === 'player' ? s.player : s.enemy;
     const target = ownerId === 'player' ? s.enemy : s.player;
@@ -93,14 +108,6 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
 
     caster.stats.mana -= ability.manaCost;
     ability.currentCooldown = ability.cooldown;
-
-    // Dispatch Sound
-    if (caster.template.id === 'kratos') soundService.playThunder();
-    else if (caster.template.id === 'lyra') soundService.playCrystal();
-    else if (caster.template.id === 'vesper') soundService.playVoid();
-    else if (caster.template.modelType === 'mage') soundService.playFire();
-    else if (caster.template.modelType === 'ranger') soundService.playVoid();
-    else soundService.playEarth();
 
     if (ability.type === 'projectile') {
       const angle = Math.atan2(ty - caster.y, tx - caster.x);
@@ -114,7 +121,6 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
         color: ability.color, life: (ability.range || 1000) / speed, effect: ability.effect
       });
     } else if (ability.type === 'aoe') {
-      soundService.playExplosion(ability.id === AbilityKey.F);
       s.vfx.push({ id: Math.random().toString(), x: caster.x, y: caster.y, type: 'ring', color: ability.color, radius: ability.radius || 100, timer: 400, maxTimer: 400 });
       const dist = Math.hypot(target.x - caster.x, target.y - caster.y);
       if (dist < (ability.radius || 100) + target.radius) {
@@ -122,7 +128,6 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
         if (ability.effect) applyStatus(target, ability.effect);
       }
     } else if (ability.type === 'dash') {
-      soundService.playDash();
       const angle = Math.atan2(ty - caster.y, tx - caster.x);
       const range = ability.range || 300;
       const steps = 10;
@@ -152,93 +157,32 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
     const dtSec = dt / 1000;
 
     const s = simRef.current;
-    if (s.phase === 'battle' && !s.isPaused) {
+    if (s.phase === 'battle') {
       if (s.countdown > 0) {
         s.countdown = Math.max(0, s.countdown - dt);
-      } else {
+      } else if (s.isHost) {
+        // Only host runs full physics simulation
         const { player, enemy, projectiles, zones, vfx, obstacles } = s;
         if (!player || !enemy) return;
 
-        // 1. Process VFX
+        // Process VFX
         for (let i = vfx.length - 1; i >= 0; i--) {
           vfx[i].timer -= dt;
           if (vfx[i].timer <= 0) vfx.splice(i, 1);
         }
 
-        // 2. Advanced AI Logic
+        // SOLO AI Logic
         if (s.gameMode === 'SOLO' && enemy.stats.hp > 0 && !enemy.buffs.some(b => b.type === StatusType.STUN)) {
-          aiTickRef.current++;
-          
-          if (aiTickRef.current % 2 === 0) { 
-            const dist = Math.hypot(player.x - enemy.x, player.y - enemy.y);
-            const isMelee = enemy.template.modelType === 'warrior' || enemy.template.modelType === 'assassin';
-            const healthRatio = enemy.stats.hp / enemy.stats.maxHp;
-            const playerHealthRatio = player.stats.hp / player.stats.maxHp;
-
-            if (healthRatio < 0.2) aiStateRef.current = 'PANIC';
-            else if (playerHealthRatio < 0.3 || (healthRatio > 0.7 && playerHealthRatio < 0.6)) aiStateRef.current = 'AGGRESSIVE';
-            else if (healthRatio < 0.5) aiStateRef.current = 'DEFENSIVE';
-            else aiStateRef.current = 'NEUTRAL';
-
-            const threateningProjectile = projectiles.find(p => {
-              if (p.ownerId === 'enemy') return false;
-              const dToP = Math.hypot(p.x - enemy.x, p.y - enemy.y);
-              if (dToP > 300) return false;
-              const dot = (p.vx * (enemy.x - p.x) + p.vy * (enemy.y - p.y));
-              return dot > 0;
-            });
-
-            if (threateningProjectile) {
-              const perpX = -threateningProjectile.vy, perpY = threateningProjectile.vx;
-              const mag = Math.hypot(perpX, perpY);
-              const side = (enemy.x - threateningProjectile.x) * threateningProjectile.vy - (enemy.y - threateningProjectile.y) * threateningProjectile.vx > 0 ? 1 : -1;
-              aiDodgeDirRef.current = { x: (perpX / mag) * side, y: (perpY / mag) * side };
-              aiReactionTicksRef.current = 15;
-              enemy.targetX = enemy.x + aiDodgeDirRef.current.x * 150;
-              enemy.targetY = enemy.y + aiDodgeDirRef.current.y * 150;
-            } else if (aiReactionTicksRef.current > 0) {
-              aiReactionTicksRef.current--;
-            } else {
-              if (aiTickRef.current % 10 === 0) {
-                if (aiStateRef.current === 'AGGRESSIVE' || (isMelee && aiStateRef.current !== 'PANIC')) {
-                  enemy.targetX = player.x; enemy.targetY = player.y;
-                } else if (aiStateRef.current === 'PANIC' || aiStateRef.current === 'DEFENSIVE') {
-                  const angleToPlayer = Math.atan2(enemy.y - player.y, enemy.x - player.x);
-                  const escapeAngle = angleToPlayer + (Math.random() - 0.5) * 0.5;
-                  enemy.targetX = enemy.x + Math.cos(escapeAngle) * 300; enemy.targetY = enemy.y + Math.sin(escapeAngle) * 300;
-                } else {
-                  const idealDist = 400;
-                  if (dist < idealDist - 50) {
-                    const ang = Math.atan2(enemy.y - player.y, enemy.x - player.x);
-                    enemy.targetX = enemy.x + Math.cos(ang) * 150; enemy.targetY = enemy.y + Math.sin(ang) * 150;
-                  } else if (dist > idealDist + 50) {
-                    enemy.targetX = player.x; enemy.targetY = player.y;
-                  }
-                }
-              }
-            }
-
-            if (aiTickRef.current % 8 === 0) {
-              const abilities = enemy.template.abilities;
-              const isPlayerStunned = player.buffs.some(b => b.type === StatusType.STUN);
-              const defensive = abilities.find(a => a.effect?.type === StatusType.SHIELD && a.currentCooldown <= 0 && enemy.stats.mana >= a.manaCost);
-              if (defensive && (threateningProjectile || healthRatio < 0.4)) castAbility('enemy', defensive.id, 0, 0);
-              const cc = abilities.find(a => (a.effect?.type === StatusType.STUN || a.effect?.type === StatusType.SLOW) && a.currentCooldown <= 0 && enemy.stats.mana >= a.manaCost);
-              if (cc && dist < (cc.range || 600) && !isPlayerStunned) castAbility('enemy', cc.id, player.x, player.y);
-              const ult = abilities.find(a => a.id === AbilityKey.F && a.currentCooldown <= 0 && enemy.stats.mana >= a.manaCost);
-              if (ult && (playerHealthRatio < 0.3 || isPlayerStunned)) castAbility('enemy', ult.id, player.x, player.y);
-              const poke = abilities.find(a => (a.id === AbilityKey.A || a.id === AbilityKey.D) && a.currentCooldown <= 0 && enemy.stats.mana >= a.manaCost);
-              if (poke && dist < (poke.range || 800)) {
-                const lead = 0.3;
-                const tx = player.x + (player.targetX - player.x) * lead;
-                const ty = player.y + (player.targetY - player.y) * lead;
-                castAbility('enemy', poke.id, tx, ty);
-              }
-            }
-          }
+           aiTickRef.current++;
+           if (aiTickRef.current % 10 === 0) {
+             enemy.targetX = player.x; enemy.targetY = player.y;
+             if (Math.hypot(player.x - enemy.x, player.y - enemy.y) < 600) {
+               castAbility('enemy', AbilityKey.A, player.x, player.y);
+             }
+           }
         }
 
-        // 3. Movement & Physics
+        // Movement & Physics
         [player, enemy].forEach((ent, idx) => {
           if (ent.stats.hp <= 0) return;
           ent.stats.mana = Math.min(ent.stats.maxMana, ent.stats.mana + ent.stats.manaRegen * dtSec);
@@ -258,9 +202,8 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
             if (d > 5) {
               const ang = Math.atan2(dy, dx);
               ent.angle = ang;
-              const step = speed * dtSec;
-              const vx = Math.cos(ang) * Math.min(d, step);
-              const vy = Math.sin(ang) * Math.min(d, step);
+              const vx = Math.cos(ang) * Math.min(d, speed * dtSec);
+              const vy = Math.sin(ang) * Math.min(d, speed * dtSec);
               if (!checkWallCollision(ent.x + vx, ent.y, ent.radius, obstacles)) ent.x += vx;
               if (!checkWallCollision(ent.x, ent.y + vy, ent.radius, obstacles)) ent.y += vy;
               ent.state = 'moving';
@@ -268,53 +211,41 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
 
             const other = idx === 0 ? enemy : player;
             if (other.stats.hp > 0 && Math.hypot(other.x - ent.x, other.y - ent.y) < ent.stats.attackRange && ent.attackTimer <= 0) {
-              if (ent.template.modelType === 'ranger' || ent.template.modelType === 'mage') {
-                const ang = Math.atan2(other.y - ent.y, other.x - ent.x);
-                projectiles.push({
-                  id: Math.random().toString(), x: ent.x, y: ent.y, vx: Math.cos(ang) * 1200, vy: Math.sin(ang) * 1200,
-                  radius: 6, damage: ent.stats.baseAttackDamage, ownerId: ent.id, color: ent.template.color, life: ent.stats.attackRange / 1200
-                });
-                soundService.playProjectile();
-              } else { applyDamage(other, ent.stats.baseAttackDamage, vfx); }
+              applyDamage(other, ent.stats.baseAttackDamage, vfx);
               ent.attackTimer = 1000 / ent.stats.attackSpeed;
             }
           } else { ent.state = 'idle'; }
           ent.attackTimer = Math.max(0, ent.attackTimer - dt);
         });
 
-        // 4. Projectiles & Zones
-        for (let i = projectiles.length - 1; i >= 0; i--) {
-          const p = projectiles[i];
-          p.x += p.vx * dtSec; p.y += p.vy * dtSec; p.life -= dtSec;
-          const target = p.ownerId === 'player' ? enemy : player;
-          if (Math.hypot(p.x - target.x, p.y - target.y) < p.radius + target.radius) {
-            applyDamage(target, p.damage, vfx);
-            if (p.effect) applyStatus(target, p.effect);
-            p.life = 0;
-          }
-          if (p.life <= 0 || checkWallCollision(p.x, p.y, p.radius, obstacles)) projectiles.splice(i, 1);
-        }
-
-        for (let i = zones.length - 1; i >= 0; i--) {
-          const z = zones[i];
-          z.timer -= dt;
-          if (z.timer <= 0) {
-            const target = z.ownerId === 'player' ? enemy : player;
-            if (Math.hypot(z.x - target.x, z.y - target.y) < z.radius + target.radius) {
-              applyDamage(target, z.damage, vfx);
-              if (z.effect) applyStatus(target, z.effect);
-            }
-            vfx.push({ id: Math.random().toString(), x: z.x, y: z.y, type: 'explosion', color: z.color, radius: z.radius, timer: 400, maxTimer: 400 });
-            zones.splice(i, 1);
+        // Sync State to Client
+        if (s.gameMode === 'MULTIPLAYER' && connection?.open) {
+          syncTimerRef.current -= dt;
+          if (syncTimerRef.current <= 0) {
+            connection.send({
+              type: 'battle_sync',
+              payload: {
+                entities: [player, enemy],
+                projectiles, zones, vfx,
+                countdown: s.countdown
+              }
+            });
+            syncTimerRef.current = 50; // Sync every 50ms
           }
         }
 
         if (player.stats.hp <= 0) onGameOver('enemy');
         else if (enemy.stats.hp <= 0) onGameOver('player');
+      } else {
+        // Guest only processes VFX for smooth feedback
+        for (let i = s.vfx.length - 1; i >= 0; i--) {
+          s.vfx[i].timer -= dt;
+          if (s.vfx[i].timer <= 0) s.vfx.splice(i, 1);
+        }
       }
     }
 
-    if (aiTickRef.current % 2 === 0) setGameState({ ...simRef.current });
+    setGameState({ ...simRef.current });
 
     const ctx = canvasRef.current?.getContext('2d');
     if (ctx) {
@@ -323,48 +254,26 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
       ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 1;
       for (let x = 0; x < ARENA_WIDTH; x += 100) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ARENA_HEIGHT); ctx.stroke(); }
       for (let y = 0; y < ARENA_HEIGHT; y += 100) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(ARENA_WIDTH, y); ctx.stroke(); }
-      s.obstacles.forEach(o => { ctx.fillStyle = '#1e293b'; ctx.strokeStyle = '#475569'; ctx.lineWidth = 2; ctx.fillRect(o.x, o.y, o.width, o.height); ctx.strokeRect(o.x, o.y, o.width, o.height); });
-      s.zones.forEach(z => { ctx.beginPath(); ctx.arc(z.x, z.y, z.radius, 0, Math.PI * 2); ctx.fillStyle = z.color + '22'; ctx.fill(); ctx.strokeStyle = z.color; ctx.setLineDash([5, 5]); ctx.stroke(); ctx.setLineDash([]); });
-      s.projectiles.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2); ctx.fillStyle = p.color; ctx.shadowBlur = 15; ctx.shadowColor = p.color; ctx.fill(); ctx.shadowBlur = 0; });
+      s.obstacles.forEach(o => { ctx.fillStyle = '#1e293b'; ctx.fillRect(o.x, o.y, o.width, o.height); });
+      s.zones.forEach(z => { ctx.beginPath(); ctx.arc(z.x, z.y, z.radius, 0, Math.PI * 2); ctx.fillStyle = z.color + '22'; ctx.fill(); ctx.strokeStyle = z.color; ctx.stroke(); });
+      s.projectiles.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2); ctx.fillStyle = p.color; ctx.fill(); });
 
       [s.player, s.enemy].forEach(ent => {
         if (!ent || ent.stats.hp <= 0) return;
-        
-        // Character Aura Pulse
-        const pulse = (Math.sin(time / 200) + 1) / 2;
-        ctx.save();
-        ctx.shadowBlur = 20 + (pulse * 15);
-        ctx.shadowColor = ent.template.color;
-        ctx.beginPath(); ctx.arc(ent.x, ent.y, ent.radius + 3 + (pulse * 4), 0, Math.PI * 2);
-        ctx.fillStyle = ent.template.color + '22'; ctx.fill();
-        ctx.strokeStyle = ent.template.color + '88'; ctx.lineWidth = 2; ctx.stroke();
-        ctx.restore();
-
-        const shield = ent.buffs.find(b => b.type === StatusType.SHIELD);
-        if (shield) {
-          ctx.beginPath(); ctx.arc(ent.x, ent.y, ent.radius * 1.5, 0, Math.PI * 2);
-          ctx.strokeStyle = '#FFD700'; ctx.lineWidth = 3; ctx.setLineDash([10, 5]); ctx.lineDashOffset = time / 20; ctx.stroke(); ctx.setLineDash([]);
-        }
-        const stunned = ent.buffs.find(b => b.type === StatusType.STUN);
-        if (stunned) { ctx.beginPath(); ctx.arc(ent.x, ent.y - 40, 10, 0, Math.PI * 2); ctx.fillStyle = '#ffcc00'; ctx.fill(); }
-
         ctx.save(); ctx.translate(ent.x, ent.y); ctx.rotate(ent.angle);
         ctx.beginPath(); ctx.arc(0, 0, ent.radius, 0, Math.PI * 2); ctx.fillStyle = ent.template.color; ctx.fill();
-        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
         ctx.beginPath(); ctx.moveTo(ent.radius, 0); ctx.lineTo(ent.radius + 15, 0); ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.stroke();
         ctx.restore();
       });
 
       s.vfx.forEach(v => {
         const p = 1 - (v.timer / v.maxTimer); ctx.globalAlpha = 1 - p;
-        if (v.type === 'ring' || v.type === 'shockwave') { ctx.beginPath(); ctx.arc(v.x, v.y, v.radius * p, 0, Math.PI * 2); ctx.strokeStyle = v.color; ctx.lineWidth = 4; ctx.stroke(); }
-        else if (v.type === 'explosion') { ctx.beginPath(); ctx.arc(v.x, v.y, v.radius * p, 0, Math.PI * 2); ctx.fillStyle = v.color; ctx.fill(); }
-        else { ctx.beginPath(); ctx.arc(v.x, v.y, v.radius * (1-p), 0, Math.PI * 2); ctx.fillStyle = v.color; ctx.fill(); }
+        ctx.beginPath(); ctx.arc(v.x, v.y, v.radius * p, 0, Math.PI * 2); ctx.strokeStyle = v.color; ctx.lineWidth = 4; ctx.stroke();
       });
       ctx.globalAlpha = 1;
     }
     requestRef.current = requestAnimationFrame(gameLoop);
-  }, [setGameState, onGameOver, castAbility]);
+  }, [setGameState, onGameOver, castAbility, connection]);
 
   useEffect(() => {
     requestRef.current = requestAnimationFrame(gameLoop);
@@ -379,15 +288,25 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
       const rect = canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left) * (ARENA_WIDTH / rect.width);
       const y = (e.clientY - rect.top) * (ARENA_HEIGHT / rect.height);
-      if (simRef.current.player) {
-        simRef.current.player.targetX = x; simRef.current.player.targetY = y;
-        simRef.current.vfx.push({ id: Math.random().toString(), x, y, type: 'ring', color: '#60a5fa', radius: 40, timer: 300, maxTimer: 300 });
+      
+      const s = simRef.current;
+      if (s.isHost) {
+        if (s.player) { s.player.targetX = x; s.player.targetY = y; }
+      } else if (connection?.open) {
+        connection.send({ type: 'battle_input', payload: { action: 'move', x, y } });
       }
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       const keys: Record<string, AbilityKey> = { 'a': AbilityKey.A, 's': AbilityKey.S, 'd': AbilityKey.D, 'f': AbilityKey.F };
       const abilityId = keys[e.key.toLowerCase()];
-      if (abilityId) castAbility('player', abilityId, mousePosRef.current.x, mousePosRef.current.y);
+      if (abilityId) {
+        const s = simRef.current;
+        if (s.isHost) {
+          castAbility('player', abilityId, mousePosRef.current.x, mousePosRef.current.y);
+        } else if (connection?.open) {
+          connection.send({ type: 'battle_input', payload: { action: 'cast', x: mousePosRef.current.x, y: mousePosRef.current.y, abilityId } });
+        }
+      }
     };
     const handleMouseMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -401,16 +320,10 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver }) =>
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('mousemove', handleMouseMove);
     };
-  }, [castAbility]);
+  }, [castAbility, connection]);
 
   return (
-    <canvas 
-      ref={canvasRef} 
-      width={ARENA_WIDTH} 
-      height={ARENA_HEIGHT} 
-      className="bg-slate-900 border-2 border-slate-800 rounded-3xl shadow-2xl cursor-crosshair block mx-auto" 
-      onContextMenu={(e) => e.preventDefault()} 
-    />
+    <canvas ref={canvasRef} width={ARENA_WIDTH} height={ARENA_HEIGHT} className="bg-slate-900 border-2 border-slate-800 rounded-3xl shadow-2xl cursor-crosshair block mx-auto" onContextMenu={(e) => e.preventDefault()} />
   );
 };
 

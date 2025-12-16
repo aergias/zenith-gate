@@ -141,7 +141,6 @@ export type Projectile = {
 export type GameMode = 'SOLO' | 'MULTIPLAYER';
 export type TurnOwner = 'Player1' | 'Player2';
 
-// Lobby specific types
 export interface Message {
   id: string;
   senderId: string;
@@ -158,6 +157,17 @@ export interface Player {
   status: 'ready' | 'waiting';
   avatar: string;
 }
+
+export type NetworkMessage = 
+  | { type: 'peer_info', payload: Player }
+  | { type: 'chat', payload: Message }
+  | { type: 'player_update', payload: Player }
+  | { type: 'ai_response', payload: Message }
+  | { type: 'char_selected', payload: CharacterTemplate }
+  | { type: 'battle_init', payload: { playerChar: CharacterTemplate, enemyChar: CharacterTemplate, arenaId: string } }
+  | { type: 'battle_sync', payload: { entities: Entity[], projectiles: Projectile[], zones: Zone[], vfx: VFX[], countdown: number } }
+  | { type: 'battle_input', payload: { action: 'move' | 'cast', x: number, y: number, abilityId?: AbilityKey } }
+  | { type: 'battle_over', payload: 'player' | 'enemy' };
 
 export type GameState = {
   player: Entity | null;

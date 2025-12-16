@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { GameState, CharacterTemplate, Entity, GameMode, ConnectionStatus, Player, Message } from './types';
+import { GameState, CharacterTemplate, Entity, GameMode, ConnectionStatus, Player, Message, NetworkMessage, AbilityKey } from './types';
 import { CHARACTERS, ARENA_WIDTH, ARENA_HEIGHT, ARENAS } from './constants';
 import CharacterSelect from './components/CharacterSelect';
 import GameCanvas from './components/GameCanvas';
@@ -13,7 +13,7 @@ import { getTacticalAdvice } from './services/geminiService';
 import { Peer, DataConnection } from 'peerjs';
 
 const generateRoomId = () => {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No O, 0, I, 1 to avoid confusion
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let result = '';
   for (let i = 0; i < 6; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -56,6 +56,11 @@ const App: React.FC = () => {
 
   const peerRef = useRef<Peer | null>(null);
   const connectionRef = useRef<DataConnection | null>(null);
+  const gameStateRef = useRef(gameState);
+
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
 
   const localUserRef = useRef<Player>({
     id: `seeker-${Math.random().toString(36).substring(7)}`,
@@ -72,68 +77,58 @@ const App: React.FC = () => {
 
   const setupPeer = (matchId: string, isJoining: boolean) => {
     const hostId = `zenith-gate-${matchId.toLowerCase().trim()}`;
-    
-    // Cleanup existing peer if any
-    if (peerRef.current) {
-      peerRef.current.destroy();
-    }
+    if (peerRef.current) peerRef.current.destroy();
 
     if (!isJoining) {
-      // Create mode
       const peer = new Peer(hostId);
       peerRef.current = peer;
-      
-      peer.on('open', (id) => {
+      peer.on('open', () => {
         setGameState(prev => ({ ...prev, isHost: true }));
         setConnStatus('connected');
-        
-        // Initialize Zenith OS
         const os: Player = { id: 'zenith-os', name: 'ZENITH OS', role: 'ai-host', status: 'ready', avatar: 'https://images.unsplash.com/photo-1614728263952-84ea256f9679?auto=format&fit=crop&q=80&w=100&h=100' };
         setGameState(prev => ({ 
           ...prev, 
           lobbyPlayers: [os, { ...localUserRef.current }],
           messages: [{ id: 'init', senderId: 'zenith-os', senderName: 'ZENITH OS', text: `Rift ${matchId} stabilized. Awaiting second resonance signature.`, timestamp: Date.now(), isAi: true }]
         }));
-
         peer.on('connection', (conn) => {
           connectionRef.current = conn;
-          setupConnection(conn);
+          setupConnection(conn, true);
         });
       });
-
       peer.on('error', (err) => {
         if (err.type === 'unavailable-id') {
-          alert("This Singularity Key is already active. Try a different one or Join.");
+          alert("Key active. Use different ID or Join.");
           setGameState(prev => ({ ...prev, phase: 'selection' }));
         }
       });
     } else {
-      // Join mode
       const guestPeer = new Peer();
       peerRef.current = guestPeer;
       guestPeer.on('open', () => {
         const conn = guestPeer.connect(hostId);
         connectionRef.current = conn;
         setGameState(prev => ({ ...prev, isHost: false }));
-        setupConnection(conn);
+        setupConnection(conn, false);
       });
       guestPeer.on('error', (err) => {
-        alert("Failed to connect to rift. Key may be invalid or expired.");
+        alert("Rift connection failed.");
         setGameState(prev => ({ ...prev, phase: 'selection' }));
       });
     }
   };
 
-  const setupConnection = (conn: DataConnection) => {
+  const setupConnection = (conn: DataConnection, isHostSide: boolean) => {
     conn.on('open', () => {
       setConnStatus('connected');
       conn.send({ type: 'peer_info', payload: { ...localUserRef.current } });
     });
 
     conn.on('data', (data: any) => {
-      switch (data.type) {
+      const msg = data as NetworkMessage;
+      switch (msg.type) {
         case 'peer_info':
-          const peerPlayer = data.payload as Player;
+          const peerPlayer = msg.payload;
           setGameState(prev => ({
             ...prev,
             remoteUsername: peerPlayer.name,
@@ -142,21 +137,40 @@ const App: React.FC = () => {
               peerPlayer
             ]
           }));
-          if (gameState.isHost) conn.send({ type: 'peer_info', payload: { ...localUserRef.current } });
+          if (isHostSide) conn.send({ type: 'peer_info', payload: { ...localUserRef.current } });
           break;
         case 'chat':
-          setGameState(prev => ({ ...prev, messages: [...prev.messages, data.payload] }));
+          setGameState(prev => ({ ...prev, messages: [...prev.messages, msg.payload] }));
           break;
         case 'player_update':
-          const updated = data.payload as Player;
+          const updated = msg.payload;
           setGameState(prev => ({
             ...prev,
             remoteReady: updated.status === 'ready',
             lobbyPlayers: prev.lobbyPlayers.map(p => p.id === updated.id ? updated : p)
           }));
           break;
-        case 'ai_response':
-          setGameState(prev => ({ ...prev, messages: [...prev.messages, data.payload] }));
+        case 'char_selected':
+          setGameState(prev => ({ ...prev, remoteSelectedChar: msg.payload }));
+          break;
+        case 'battle_init':
+          receiveBattleInit(msg.payload.playerChar, msg.payload.enemyChar, msg.payload.arenaId);
+          break;
+        case 'battle_sync':
+          if (!gameStateRef.current.isHost) {
+            setGameState(prev => ({
+              ...prev,
+              player: msg.payload.entities.find(e => e.id === 'enemy') || prev.player, // Note: ID perspective flip
+              enemy: msg.payload.entities.find(e => e.id === 'player') || prev.enemy,
+              projectiles: msg.payload.projectiles,
+              zones: msg.payload.zones,
+              vfx: msg.payload.vfx,
+              countdown: msg.payload.countdown
+            }));
+          }
+          break;
+        case 'battle_over':
+          setGameState(prev => ({ ...prev, phase: 'results', winner: msg.payload === 'player' ? 'enemy' : 'player' }));
           break;
       }
     });
@@ -164,31 +178,23 @@ const App: React.FC = () => {
 
   const handleStartGame = useCallback((mode: GameMode, action: 'CREATE' | 'JOIN' | 'SOLO') => {
     soundService.playUI();
-    
     if (action === 'SOLO') {
       setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep' }));
       return;
     }
-
     let id = matchInput.trim().toUpperCase();
-    if (action === 'CREATE') {
-      id = generateRoomId();
-    }
-
-    if (action === 'JOIN' && !id) {
-      return alert("Please enter a Singularity Key to join.");
-    }
-
-    setGameState(prev => ({ 
-      ...prev, 
-      gameMode: 'MULTIPLAYER', 
-      matchId: id, 
-      phase: 'lobby',
-      isHost: action === 'CREATE'
-    }));
-    
+    if (action === 'CREATE') id = generateRoomId();
+    if (action === 'JOIN' && !id) return alert("Enter Singularity Key.");
+    setGameState(prev => ({ ...prev, gameMode: 'MULTIPLAYER', matchId: id, phase: 'lobby', isHost: action === 'CREATE' }));
     setupPeer(id, action === 'JOIN');
   }, [matchInput]);
+
+  const handleCharSelected = (char: CharacterTemplate) => {
+    setGameState(prev => ({ ...prev, localSelectedChar: char }));
+    if (connectionRef.current?.open) {
+      connectionRef.current.send({ type: 'char_selected', payload: char });
+    }
+  };
 
   const handleSendMessage = (text: string) => {
     const msg: Message = { id: `msg-${Date.now()}`, senderId: localUserRef.current.id, senderName: localUserRef.current.name, text, timestamp: Date.now() };
@@ -213,28 +219,45 @@ const App: React.FC = () => {
     if (connectionRef.current?.open) connectionRef.current.send({ type: 'player_update', payload: { ...localUserRef.current } });
   };
 
-  const copyToClipboard = () => {
-    if (gameState.matchId) {
-      navigator.clipboard.writeText(gameState.matchId);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-      soundService.playUI();
-    }
-  };
-
   const initiateBattle = async (playerChar: CharacterTemplate) => {
+    if (!gameState.isHost && gameState.gameMode === 'MULTIPLAYER') return;
     setIsWarping(true);
     let enemyChar = gameState.remoteSelectedChar || CHARACTERS[0];
+    
+    if (gameState.gameMode === 'MULTIPLAYER' && connectionRef.current?.open) {
+      connectionRef.current.send({ 
+        type: 'battle_init', 
+        payload: { 
+          playerChar: enemyChar, // For the peer, the host's character is their enemy
+          enemyChar: playerChar, 
+          arenaId: gameState.selectedArenaId 
+        } 
+      });
+    }
+
     if (gameState.gameMode === 'SOLO') {
       const otherChars = CHARACTERS.filter(c => c.id !== playerChar.id);
       enemyChar = otherChars[Math.floor(Math.random() * otherChars.length)];
     }
+
     const playerEntity: Entity = { id: 'player', x: 150, y: ARENA_HEIGHT / 2, targetX: 150, targetY: ARENA_HEIGHT / 2, radius: 25, stats: { ...playerChar.stats }, template: JSON.parse(JSON.stringify(playerChar)), isPlayer: true, angle: 0, state: 'idle', buffs: [], attackTimer: 0 };
     const enemyEntity: Entity = { id: 'enemy', x: ARENA_WIDTH - 150, y: ARENA_HEIGHT / 2, targetX: ARENA_WIDTH - 150, targetY: ARENA_HEIGHT / 2, radius: 25, stats: { ...enemyChar.stats }, template: JSON.parse(JSON.stringify(enemyChar)), isPlayer: false, angle: Math.PI, state: 'idle', buffs: [], attackTimer: 0 };
     const advice = await getTacticalAdvice(playerChar, enemyChar);
+    
     setTimeout(() => {
       setIsWarping(false);
       setGameState(prev => ({ ...prev, player: playerEntity, enemy: enemyEntity, phase: 'battle', countdown: 1200, tacticalAdvice: advice }));
+    }, 1500);
+  };
+
+  const receiveBattleInit = (playerChar: CharacterTemplate, enemyChar: CharacterTemplate, arenaId: string) => {
+    setIsWarping(true);
+    const playerEntity: Entity = { id: 'player', x: ARENA_WIDTH - 150, y: ARENA_HEIGHT / 2, targetX: ARENA_WIDTH - 150, targetY: ARENA_HEIGHT / 2, radius: 25, stats: { ...playerChar.stats }, template: JSON.parse(JSON.stringify(playerChar)), isPlayer: true, angle: Math.PI, state: 'idle', buffs: [], attackTimer: 0 };
+    const enemyEntity: Entity = { id: 'enemy', x: 150, y: ARENA_HEIGHT / 2, targetX: 150, targetY: ARENA_HEIGHT / 2, radius: 25, stats: { ...enemyChar.stats }, template: JSON.parse(JSON.stringify(enemyChar)), isPlayer: false, angle: 0, state: 'idle', buffs: [], attackTimer: 0 };
+    
+    setTimeout(() => {
+      setIsWarping(false);
+      setGameState(prev => ({ ...prev, player: playerEntity, enemy: enemyEntity, phase: 'battle', selectedArenaId: arenaId, countdown: 1200 }));
     }, 1500);
   };
 
@@ -270,18 +293,14 @@ const App: React.FC = () => {
              </div>
              <div className="flex flex-col gap-4">
                 <button onClick={() => handleStartGame('SOLO', 'SOLO')} className="w-full bg-white/5 border border-white/10 text-white/80 font-orbitron font-bold tracking-[0.2em] py-4 rounded-xl hover:bg-white/10 transition-all uppercase text-[10px]">Solo Training</button>
-                
                 <div className="h-px bg-white/5 my-2" />
-                
                 <button onClick={() => handleStartGame('MULTIPLAYER', 'CREATE')} className="w-full bg-[#d4af37]/20 border border-[#d4af37]/30 text-[#d4af37] font-orbitron font-bold tracking-[0.2em] py-5 rounded-xl hover:bg-[#d4af37]/30 transition-all uppercase text-xs shadow-[0_0_15px_rgba(212,175,55,0.1)]">Create Private Rift</button>
-                
                 <div className="flex bg-black/40 border border-[#d4af37]/10 rounded-xl overflow-hidden p-1 focus-within:border-[#d4af37]/50 transition-colors">
                   <input type="text" placeholder="Singularity Key..." className="bg-transparent text-white px-5 py-3 outline-none flex-1 font-mono text-sm uppercase" value={matchInput} onChange={(e) => setMatchInput(e.target.value.toUpperCase())} />
                   <button onClick={() => handleStartGame('MULTIPLAYER', 'JOIN')} className="px-6 bg-[#d4af37] text-black font-orbitron font-black uppercase text-[10px] rounded-lg transition-colors">Join</button>
                 </div>
              </div>
           </div>
-          <p className="mt-8 text-white/30 text-[10px] tracking-widest font-orbitron">RESONANCE PROTOCOL v9.0.5</p>
         </div>
       )}
 
@@ -299,31 +318,27 @@ const App: React.FC = () => {
                  </button>
               </div>
             </div>
-            {gameState.localReady && (gameState.remoteReady || gameState.gameMode === 'SOLO') && (
+            {gameState.localReady && (gameState.remoteReady || gameState.gameMode === 'SOLO') && gameState.isHost && (
               <button onClick={() => setGameState(prev => ({ ...prev, phase: 'prep' }))} className="w-full py-6 bg-[#d4af37] text-black font-orbitron font-black uppercase tracking-widest rounded-3xl animate-pulse shadow-[0_0_30px_rgba(212,175,55,0.3)]">Open Prep Sector</button>
+            )}
+            {gameState.localReady && !gameState.isHost && (
+              <div className="w-full py-6 glass rounded-3xl text-center font-orbitron text-[10px] text-[#d4af37]/60 tracking-widest uppercase italic">Awaiting Host Selection...</div>
             )}
           </div>
           <div className="flex-1 flex flex-col gap-6 min-w-0">
              <ChatWindow currentUser={localUserRef.current} messages={gameState.messages} onSendMessage={handleSendMessage} onAiResponse={handleAiResponse} isHost={gameState.isHost} />
-             <div className="glass h-24 rounded-[32px] zenith-border flex items-center px-10 justify-between bg-gradient-to-r from-black/60 to-transparent">
+             <div className="glass h-24 rounded-[32px] zenith-border flex items-center px-10 justify-between">
                 <div className="flex items-center gap-6">
-                   <div className="bg-white/5 p-3 rounded-xl border border-white/10">
-                     <i className="fa-solid fa-key text-[#d4af37]"></i>
-                   </div>
+                   <div className="bg-white/5 p-3 rounded-xl border border-white/10"><i className="fa-solid fa-key text-[#d4af37]"></i></div>
                    <div>
                       <p className="text-[9px] text-[#d4af37]/50 font-orbitron tracking-[0.4em] mb-1 uppercase">Singularity Key</p>
                       <div className="flex items-center gap-3">
                         <p className="text-2xl text-white font-mono tracking-widest font-bold">{gameState.matchId}</p>
-                        <button onClick={copyToClipboard} className={`text-[10px] px-3 py-1 rounded bg-white/5 hover:bg-[#d4af37]/20 hover:text-[#d4af37] transition-all uppercase font-black tracking-tighter ${copied ? 'text-emerald-400' : 'text-white/40'}`}>
-                          {copied ? 'COPIED' : 'COPY'}
-                        </button>
+                        <button onClick={() => { navigator.clipboard.writeText(gameState.matchId || ""); setCopied(true); setTimeout(() => setCopied(false), 2000); }} className="text-[10px] px-3 py-1 rounded bg-white/5 text-white/40">{copied ? 'COPIED' : 'COPY'}</button>
                       </div>
                    </div>
                 </div>
-                <div className="text-right flex flex-col items-end">
-                   <p className="text-[9px] text-[#d4af37]/50 font-orbitron tracking-[0.4em] mb-1 uppercase">Gate Stability</p>
-                   <p className={`text-sm font-mono tracking-wider px-4 py-1 rounded-full border ${connStatus === 'connected' ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5' : 'text-amber-500 border-amber-500/20 bg-amber-500/5'}`}>{connStatus.toUpperCase()}</p>
-                </div>
+                <div className="text-right"><p className="text-[9px] text-[#d4af37]/50 uppercase">Stability</p><p className="text-emerald-400 font-mono text-sm uppercase">{connStatus}</p></div>
              </div>
           </div>
         </div>
@@ -333,17 +348,19 @@ const App: React.FC = () => {
         <div className="flex-1 w-full flex flex-col items-center overflow-y-auto p-8 gap-8 animate-fade-in">
           <h2 className="font-cinzel text-4xl font-bold tracking-[0.1em] text-[#d4af37] zenith-glow uppercase">Prep Sector</h2>
           <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-8">
-            <CharacterSelect characters={CHARACTERS} onSelect={(c) => setGameState(prev => ({ ...prev, localSelectedChar: c }))} isWarping={isWarping} selectedId={gameState.localSelectedChar?.id} remoteId={gameState.remoteSelectedChar?.id} />
+            <CharacterSelect characters={CHARACTERS} onSelect={handleCharSelected} isWarping={isWarping} selectedId={gameState.localSelectedChar?.id} remoteId={gameState.remoteSelectedChar?.id} />
             <div className="flex flex-col gap-6">
               <div className="glass p-6 rounded-3xl zenith-border space-y-4">
                  <span className="text-[10px] font-orbitron font-black text-[#d4af37]/50 uppercase tracking-widest">Arena Sector</span>
                  <div className="flex flex-col gap-2">
                     {ARENAS.map(a => (
-                      <button key={a.id} onClick={() => setGameState(prev => ({ ...prev, selectedArenaId: a.id }))} className={`w-full px-4 py-3 rounded-xl text-left text-[10px] font-bold uppercase border transition-all ${gameState.selectedArenaId === a.id ? 'bg-[#d4af37] border-[#d4af37] text-black' : 'bg-black/40 border-white/5 text-white/40 hover:border-[#d4af37]/30'}`}>{a.name}</button>
+                      <button key={a.id} disabled={!gameState.isHost} onClick={() => setGameState(prev => ({ ...prev, selectedArenaId: a.id }))} className={`w-full px-4 py-3 rounded-xl text-left text-[10px] font-bold uppercase border transition-all ${gameState.selectedArenaId === a.id ? 'bg-[#d4af37] border-[#d4af37] text-black' : 'bg-black/40 border-white/5 text-white/40'}`}>{a.name}</button>
                     ))}
                  </div>
               </div>
-              <button onClick={() => gameState.localSelectedChar && initiateBattle(gameState.localSelectedChar)} disabled={!gameState.localSelectedChar || isWarping} className={`w-full py-6 rounded-3xl font-orbitron font-bold uppercase italic text-xl transition-all transform active:scale-95 bg-[#d4af37] text-black shadow-2xl disabled:opacity-20`}>Warp to Arena</button>
+              {gameState.isHost && (
+                <button onClick={() => gameState.localSelectedChar && initiateBattle(gameState.localSelectedChar)} disabled={!gameState.localSelectedChar || isWarping} className={`w-full py-6 rounded-3xl font-orbitron font-bold uppercase italic text-xl transition-all bg-[#d4af37] text-black shadow-2xl`}>Warp to Arena</button>
+              )}
             </div>
           </div>
         </div>
@@ -353,7 +370,10 @@ const App: React.FC = () => {
         <div className="h-screen w-full grid grid-rows-[auto_1fr_auto] relative overflow-hidden bg-slate-950">
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} matchId={gameState.matchId} mode="header" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
           <main className="relative game-canvas-container flex items-center justify-center min-h-0">
-             <GameCanvas gameState={gameState} setGameState={setGameState} onGameOver={(w) => setGameState(prev => ({ ...prev, phase: 'results', winner: w }))} />
+             <GameCanvas gameState={gameState} setGameState={setGameState} onGameOver={(w) => {
+               setGameState(prev => ({ ...prev, phase: 'results', winner: w }));
+               if (connectionRef.current?.open && gameState.isHost) connectionRef.current.send({ type: 'battle_over', payload: w });
+             }} connection={connectionRef.current} />
           </main>
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} mode="footer" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
         </div>
