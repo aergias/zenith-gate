@@ -6,7 +6,7 @@ type SyncMessage = {
   senderId: string;
   data: any;
   timestamp: number;
-  protocol: 'ZENITH_V10_STABLE'; // Incremented protocol version for fresh handshake
+  protocol: 'ZENITH_V15_FINAL'; // Incremented for isolation
 };
 
 type StateCallback = (type: string, data: any) => void;
@@ -21,17 +21,18 @@ class SyncService {
   private status: ConnectionStatus = 'disconnected';
   private heartbeatInterval: number | null = null;
   private reconnectTimeout: number | null = null;
-  private connectionTimeout: number | null = null;
+  private watchdogInterval: number | null = null;
   private reconnectAttempts: number = 0;
-  private connectionLock: boolean = false;
+  private isConnecting: boolean = false;
+  private retryInProgress: boolean = false;
+  private connectionAttemptId: number = 0;
 
   private setStatus(newStatus: ConnectionStatus) {
     if (this.status === newStatus) return;
     this.status = newStatus;
-    console.log(`[SyncService] Rift Signal: ${newStatus.toUpperCase()}`);
+    console.log(`[SyncService] Rift State: ${newStatus.toUpperCase()}`);
     if (this.onStatusChange) {
-      // Use requestAnimationFrame to ensure UI updates don't collide with socket events
-      requestAnimationFrame(() => this.onStatusChange?.(newStatus));
+      this.onStatusChange(newStatus);
     }
   }
 
@@ -44,132 +45,155 @@ class SyncService {
       statusCallback(this.status);
     }
 
-    // If already targeting this match and either open or attempting, don't interrupt
-    if (this.socket && 
-       (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) && 
-       this.matchId === matchId) {
-      console.log(`[SyncService] Maintaining existing rift for match: ${matchId}`);
-      return;
+    // If target match changes, full reset
+    if (this.matchId !== matchId) {
+      this.matchId = matchId;
+      this.reconnectAttempts = 0;
+      this.connect(true);
+    } else if (this.status === 'disconnected' || this.status === 'error') {
+      this.connect(true);
     }
 
-    console.log(`[SyncService] Calibrating new rift for match: ${matchId}`);
-    this.matchId = matchId;
-    this.reconnectAttempts = 0;
-    this.connect(true);
+    this.startWatchdog();
+  }
+
+  private startWatchdog() {
+    this.stopWatchdog();
+    this.watchdogInterval = window.setInterval(() => {
+      // If we are stuck in 'connecting' for 4+ seconds, force a fresh rift
+      if (this.status === 'connecting' && this.socket?.readyState === WebSocket.CONNECTING) {
+        console.warn("[SyncService] Rift Handshake Timeout. Forcing Recalibration...");
+        this.connect(true);
+      }
+    }, 4000);
+  }
+
+  private stopWatchdog() {
+    if (this.watchdogInterval) {
+      clearInterval(this.watchdogInterval);
+      this.watchdogInterval = null;
+    }
   }
 
   connect(force: boolean = false) {
-    if (force) {
-      this.cleanup();
-      this.reconnectAttempts = 0;
-      this.connectionLock = false;
+    if (!navigator.onLine) {
+      this.setStatus('disconnected');
+      return;
     }
 
-    if (this.connectionLock || !this.matchId) return;
+    if (force) {
+      this.cleanup();
+      this.retryInProgress = false;
+    }
     
-    this.connectionLock = true;
-    this.setStatus('connecting');
+    if (!this.matchId || this.isConnecting) return;
 
-    // Public demo relay - broadly accessible
-    const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`;
+    this.isConnecting = true;
+    this.setStatus('connecting');
+    this.connectionAttemptId++;
+    const currentAttemptId = this.connectionAttemptId;
     
+    // Public Relay Endpoint
+    const relayUrl = `wss://socketsbay.com/wss/v2/1/demo/`; 
+
     try {
       this.socket = new WebSocket(relayUrl);
 
-      // Force a timeout if the handshake takes too long (the "stuck in yellow" fix)
-      if (this.connectionTimeout) clearTimeout(this.connectionTimeout);
-      this.connectionTimeout = window.setTimeout(() => {
-        if (this.socket && this.socket.readyState === WebSocket.CONNECTING) {
-          console.warn("[SyncService] Handshake timeout. Recycling socket.");
-          this.socket.close(); // This triggers onclose and subsequent retry
-        }
-      }, 5000);
-
       this.socket.onopen = () => {
-        if (this.connectionTimeout) clearTimeout(this.connectionTimeout);
-        console.log(`[SyncService] Rift Harmonic Established.`);
+        if (this.connectionAttemptId !== currentAttemptId) return;
+        this.isConnecting = false;
+        this.retryInProgress = false;
+        console.log(`[SyncService] Signal Locked. Protocol: ZENITH_V15_FINAL`);
         this.setStatus('connected');
         this.reconnectAttempts = 0;
-        this.connectionLock = false;
         this.startHeartbeat();
       };
 
       this.socket.onmessage = (event) => {
+        if (this.connectionAttemptId !== currentAttemptId) return;
         try {
           const msg: SyncMessage = JSON.parse(event.data);
           if (
             msg && 
-            msg.protocol === 'ZENITH_V10_STABLE' && 
+            msg.protocol === 'ZENITH_V15_FINAL' && 
             msg.matchId === this.matchId && 
             msg.senderId !== this.clientId
           ) {
             this.onUpdate?.(msg.type, msg.data);
           }
         } catch (e) {
-          // Ignore malformed packets from public noise
+          // Public channel noise from other apps - ignored safely
         }
-      };
-
-      this.socket.onerror = (err) => {
-        console.warn(`[SyncService] Distortion detected in rift stream.`);
-        this.connectionLock = false;
       };
 
       this.socket.onclose = (event) => {
-        if (this.connectionTimeout) clearTimeout(this.connectionTimeout);
-        console.warn(`[SyncService] Rift Collapsed | Code: ${event.code} | Attempt: ${this.reconnectAttempts}`);
-        this.connectionLock = false;
-        this.stopHeartbeat();
-        
+        if (this.connectionAttemptId !== currentAttemptId) return;
+        this.isConnecting = false;
         if (this.status !== 'disconnected') {
-          // Persistent retries with exponential backoff + jitter
-          const delay = Math.min(1000 + (this.reconnectAttempts * 1000) + (Math.random() * 1000), 15000);
-          this.reconnectAttempts++;
-          
-          if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-          this.reconnectTimeout = window.setTimeout(() => {
-            if (this.matchId && this.status !== 'disconnected') {
-              this.connect();
-            }
-          }, delay);
+          console.warn(`[SyncService] Signal Lost (Code ${event.code}). Initiating Recovery...`);
+          this.handleRetry();
         }
       };
+
+      this.socket.onerror = () => {
+        if (this.connectionAttemptId !== currentAttemptId) return;
+        this.isConnecting = false;
+        // Suppress redundant error logs; handleRetry will manage the state
+        this.handleRetry();
+      };
     } catch (err) {
-      console.error('[SyncService] Fatal Rift Fault:', err);
-      this.connectionLock = false;
+      this.isConnecting = false;
+      this.retryInProgress = false;
+      console.warn('[SyncService] Failed to open rift door:', err);
       this.setStatus('error');
     }
+  }
+
+  private handleRetry() {
+    if (!this.matchId || this.status === 'disconnected' || this.retryInProgress) return;
+    
+    this.retryInProgress = true;
+    this.stopHeartbeat();
+    
+    // Exponential backoff with a cap
+    const delay = Math.min(1000 + (this.reconnectAttempts * 1500), 10000);
+    this.reconnectAttempts++;
+    
+    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+    this.reconnectTimeout = window.setTimeout(() => {
+      this.retryInProgress = false;
+      if (this.matchId && this.status !== 'disconnected') {
+        this.connect();
+      }
+    }, delay);
   }
 
   private startHeartbeat() {
     this.stopHeartbeat();
     this.heartbeatInterval = window.setInterval(() => {
       if (this.socket?.readyState === WebSocket.OPEN) {
-        this.send('HEARTBEAT', { t: Date.now() });
+        this.send('KEEP_ALIVE', { timestamp: Date.now() });
       }
-    }, 10000);
+    }, 15000);
   }
 
   private stopHeartbeat() {
-    if (this.heartbeatInterval) {
-      window.clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
-    }
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
   }
 
   private cleanup() {
     this.stopHeartbeat();
+    this.isConnecting = false;
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-    if (this.connectionTimeout) clearTimeout(this.connectionTimeout);
-    
     if (this.socket) {
+      // Detach listeners before closing to prevent race condition loops
       this.socket.onopen = null;
       this.socket.onmessage = null;
-      this.socket.onerror = null;
       this.socket.onclose = null;
-      try {
-        if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
-          this.socket.close();
+      this.socket.onerror = null;
+      try { 
+        if (this.socket.readyState !== WebSocket.CLOSED) {
+          this.socket.close(); 
         }
       } catch (e) {}
       this.socket = null;
@@ -177,7 +201,7 @@ class SyncService {
   }
 
   send(type: string, data: any) {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.matchId) return;
+    if (this.socket?.readyState !== WebSocket.OPEN || !this.matchId) return;
 
     const payload: SyncMessage = {
       type,
@@ -185,22 +209,24 @@ class SyncService {
       senderId: this.clientId,
       data,
       timestamp: Date.now(),
-      protocol: 'ZENITH_V10_STABLE'
+      protocol: 'ZENITH_V15_FINAL'
     };
 
     try {
       this.socket.send(JSON.stringify(payload));
     } catch (err) {
-      console.warn('[SyncService] Failed to broadcast packet.');
+      // Trace dropped packets silently; retry logic will catch major disconnects
     }
   }
 
   disconnect() {
     this.setStatus('disconnected');
+    this.stopWatchdog();
     this.cleanup();
     this.matchId = null;
-    this.connectionLock = false;
     this.reconnectAttempts = 0;
+    this.connectionAttemptId++;
+    this.retryInProgress = false;
   }
 
   getClientId() { return this.clientId; }

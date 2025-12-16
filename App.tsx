@@ -16,7 +16,7 @@ const App: React.FC = () => {
   const [connStatus, setConnStatus] = useState<ConnectionStatus>('disconnected');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [matchInput, setMatchInput] = useState("");
-  const [searchTimeout, setSearchTimeout] = useState(false);
+  const [discoveryAttempts, setDiscoveryAttempts] = useState(0);
   
   const [gameState, setGameState] = useState<GameState>({
     player: null,
@@ -59,7 +59,7 @@ const App: React.FC = () => {
     if (mode === 'MULTIPLAYER' && !id) return alert("Please enter a Singularity Code.");
 
     soundService.playUI();
-    setSearchTimeout(false);
+    setDiscoveryAttempts(0);
     
     if (mode === 'MULTIPLAYER') {
       setGameState(prev => ({ 
@@ -83,70 +83,39 @@ const App: React.FC = () => {
   }, [matchInput]);
 
   useEffect(() => {
-    if (gameState.phase === 'lobby' && (connStatus === 'connecting' || connStatus === 'disconnected' || connStatus === 'error')) {
-      const timer = setTimeout(() => setSearchTimeout(true), 10000);
-      return () => clearTimeout(timer);
-    }
-  }, [gameState.phase, connStatus]);
-
-  useEffect(() => {
     const checkHash = () => {
       const hash = window.location.hash;
       if (hash.includes('matchId=')) {
         const id = hash.split('matchId=')[1].split('&')[0].trim().toUpperCase();
         if (id && id !== gameState.matchId) {
           setMatchInput(id);
-          setTimeout(() => handleStartGame('MULTIPLAYER', id), 150);
+          handleStartGame('MULTIPLAYER', id);
         }
       }
     };
-    
     checkHash();
     window.addEventListener('hashchange', checkHash);
-    return () => {
-      window.removeEventListener('hashchange', checkHash);
-      syncService.disconnect();
-    };
-  }, [gameState.matchId, handleStartGame]);
+    return () => window.removeEventListener('hashchange', checkHash);
+  }, [handleStartGame, gameState.matchId]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (gameState.phase === 'battle') {
-          setIsMenuOpen(prev => !prev);
-          setGameState(prev => ({ ...prev, isPaused: !prev.isPaused }));
-          soundService.playUI();
-        } else if (gameState.phase === 'lobby' || gameState.phase === 'prep') {
-          handleQuit();
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState.phase]);
-
-  // Handle incoming sync messages
+  // Sync Message Processor
   useEffect(() => {
     syncUpdateRef.current = (type: string, data: any) => {
       switch (type) {
         case 'DISCOVERY':
-          setGameState(prev => ({ 
-            ...prev, 
-            remoteUsername: data.username, 
-            isHost: syncService.getClientId() < data.clientId 
-          }));
-          // Immediate handshake reply
-          syncService.send('DISCOVERY_REPLY', { 
-            username: localUsernameRef.current, 
-            clientId: syncService.getClientId() 
-          });
-          break;
-        case 'DISCOVERY_REPLY':
-          setGameState(prev => ({ 
-            ...prev, 
-            remoteUsername: data.username,
-            isHost: syncService.getClientId() < data.clientId 
-          }));
+        case 'HANDSHAKE':
+          if (!gameState.remoteUsername) {
+            setGameState(prev => ({ 
+              ...prev, 
+              remoteUsername: data.username, 
+              isHost: syncService.getClientId() < data.clientId 
+            }));
+            // Immediate handshake confirmation
+            syncService.send('HANDSHAKE', { 
+              username: localUsernameRef.current, 
+              clientId: syncService.getClientId() 
+            });
+          }
           break;
         case 'CHAR_SELECT':
           const remoteChar = CHARACTERS.find(c => c.id === data.charId);
@@ -162,7 +131,7 @@ const App: React.FC = () => {
     };
   });
 
-  // Multi-Peer Lifecycle Management
+  // Discovery Loop
   useEffect(() => {
     if (gameState.matchId && (gameState.phase === 'lobby' || gameState.phase === 'prep')) {
       syncService.subscribe(
@@ -171,19 +140,19 @@ const App: React.FC = () => {
         (status) => setConnStatus(status)
       );
 
-      // Recursive discovery broadcast
       const interval = window.setInterval(() => {
         if (syncService.getStatus() === 'connected' && !gameState.remoteUsername) {
+          setDiscoveryAttempts(prev => prev + 1);
           syncService.send('DISCOVERY', { 
             username: localUsernameRef.current, 
             clientId: syncService.getClientId() 
           });
         }
-      }, 1500);
+      }, 750); // Aggressive discovery pulse
 
       return () => clearInterval(interval);
     }
-  }, [gameState.matchId, gameState.phase]);
+  }, [gameState.matchId, gameState.phase, gameState.remoteUsername]);
 
   const generateAndStartHost = useCallback(() => {
     const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -268,15 +237,9 @@ const App: React.FC = () => {
     window.location.hash = '';
   }, []);
 
-  const handleSoloWarp = () => {
-    syncService.disconnect();
-    setGameState(prev => ({ ...prev, gameMode: 'SOLO', phase: 'prep', matchId: undefined }));
-    window.location.hash = '';
-  };
-
   const handleRecalibrate = () => {
     soundService.playUI();
-    setSearchTimeout(false);
+    setDiscoveryAttempts(0);
     syncService.connect(true);
   };
 
@@ -287,8 +250,6 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[999] pointer-events-none flex items-center justify-center overflow-hidden bg-black/40 backdrop-blur-sm">
           <div className="absolute inset-0 bg-white/10 animate-warp"></div>
           <div className="w-[800px] h-[800px] border-[16px] border-blue-500/20 rounded-full animate-portal blur-xl"></div>
-          <div className="w-[600px] h-[600px] border-[8px] border-white/30 rounded-full animate-portal [animation-delay:0.1s] blur-lg"></div>
-          <div className="w-[400px] h-[400px] border-[4px] border-blue-400/50 rounded-full animate-portal [animation-delay:0.2s] blur-md"></div>
           <div className="absolute inset-0 bg-gradient-to-tr from-blue-600/30 via-transparent to-purple-600/30"></div>
           <div className="flex flex-col items-center gap-4 z-10">
             <div className="text-white font-black text-6xl italic tracking-tighter uppercase animate-pulse drop-shadow-[0_0_20px_rgba(255,255,255,0.5)]">Warping...</div>
@@ -340,39 +301,37 @@ const App: React.FC = () => {
       {gameState.phase === 'lobby' && (
         <div className="flex-1 flex flex-col items-center justify-center gap-12 animate-fade-in w-full max-w-4xl p-6 mx-auto">
            <div className="bg-slate-900/50 p-16 rounded-[40px] border border-slate-700 shadow-2xl w-full flex flex-col items-center gap-10">
-             <div className="text-center">
+             <div className="text-center w-full">
                 <div className="flex items-center gap-3 mb-4 justify-center">
-                   <div className={`w-3 h-3 rounded-full shadow-[0_0_10px] ${connStatus === 'connected' ? 'bg-green-500 shadow-green-500/50' : connStatus === 'error' ? 'bg-red-600 shadow-red-500/50' : 'bg-amber-500 animate-pulse'}`} />
+                   <div className="relative">
+                    <div className={`w-3 h-3 rounded-full shadow-[0_0_10px] ${connStatus === 'connected' ? 'bg-green-500 shadow-green-500/50' : connStatus === 'error' ? 'bg-red-600 shadow-red-500/50' : 'bg-amber-500 animate-pulse'}`} />
+                    {(connStatus === 'connecting' || connStatus === 'disconnected') && <div className="absolute inset-0 w-3 h-3 border-2 border-amber-500 rounded-full animate-ping opacity-75"></div>}
+                   </div>
                    <span className={`text-[10px] font-black uppercase tracking-widest ${connStatus === 'connected' ? 'text-green-400' : connStatus === 'error' ? 'text-red-500' : 'text-amber-400'}`}>
-                     {connStatus === 'connected' ? 'Gate Synchronized' : connStatus === 'error' ? 'Singularity Link Collapsed' : 'Aligning Rift Frequencies...'}
+                     {connStatus === 'connected' ? 'Gate Synchronized' : connStatus === 'error' ? 'Singularity Link Blocked' : 'Aligning Rift Frequencies...'}
                    </span>
                 </div>
                 <div className="text-7xl font-black text-white font-mono bg-slate-950 px-10 py-6 rounded-3xl border-2 border-slate-800 tracking-[0.2em] shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)]">{gameState.matchId}</div>
                 
-                {(connStatus === 'error' || searchTimeout || connStatus === 'connecting') && (
-                  <div className="flex flex-col items-center gap-3 mt-8 animate-fade-in">
-                    <p className={`text-[11px] font-black uppercase tracking-tighter ${connStatus === 'error' ? 'text-red-500' : 'text-amber-500'}`}>
-                      {connStatus === 'error' ? 'Rift Signal Terminated' : 'Protocol Synchronization Throttled'}
-                    </p>
-                    <div className="flex gap-4">
-                      <button onClick={handleRecalibrate} className="px-8 py-4 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-full hover:bg-slate-700 transition-all shadow-lg flex items-center gap-2">
-                        <i className="fa-solid fa-rotate-right"></i>
-                        Recalibrate
-                      </button>
-                      <button onClick={handleSoloWarp} className="px-8 py-4 bg-blue-600 border border-blue-500 text-white text-[10px] font-black uppercase rounded-full hover:bg-blue-500 transition-all shadow-[0_0_25px_rgba(37,99,235,0.4)] flex items-center gap-2">
-                        <i className="fa-solid fa-bolt"></i>
-                        Force Solo Warp
-                      </button>
+                {connStatus === 'connected' && !gameState.remoteUsername && (
+                  <div className="mt-4 flex flex-col items-center gap-2">
+                    <div className="flex gap-1 h-1 w-32 bg-slate-800 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-500 animate-[loading_2s_infinite]" style={{ width: '30%' }}></div>
                     </div>
+                    <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Handshake Pulse (Attempt {discoveryAttempts})</span>
                   </div>
                 )}
 
-                {!searchTimeout && connStatus === 'connected' && (
-                  <button onClick={copyInviteLink} className={`mt-6 px-8 py-3 rounded-full text-[10px] font-black uppercase transition-all flex items-center gap-2 ${copied ? 'bg-green-600' : 'bg-slate-800 hover:bg-slate-700'} text-white mx-auto`}>
-                    <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`}></i>
-                    {copied ? 'Link Copied' : 'Copy Warp Link'}
+                <div className="flex gap-4 justify-center mt-8">
+                  <button onClick={handleRecalibrate} className="px-6 py-3 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-xl hover:bg-slate-700 transition-all flex items-center gap-2">
+                    <i className="fa-solid fa-rotate-right"></i>
+                    {connStatus === 'error' ? 'Force Reset Singularity' : 'Recalibrate Rift'}
                   </button>
-                )}
+                  <button onClick={copyInviteLink} className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-2 ${copied ? 'bg-green-600' : 'bg-blue-600 hover:bg-blue-500'} text-white`}>
+                    <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`}></i>
+                    {copied ? 'Warp Link Copied' : 'Invite Challenger'}
+                  </button>
+                </div>
              </div>
              <div className="flex items-center gap-12 w-full justify-center">
                 <div className="text-center">
@@ -392,11 +351,9 @@ const App: React.FC = () => {
                 </div>
              </div>
              {gameState.remoteUsername ? (
-               <button onClick={() => setGameState(prev => ({ ...prev, phase: 'prep' }))} className="px-12 py-5 bg-blue-600 hover:bg-blue-500 text-white font-black uppercase rounded-2xl shadow-xl transform transition-all hover:scale-105 active:scale-95 italic tracking-tighter">Initialize Prep Sector</button>
+               <button onClick={() => setGameState(prev => ({ ...prev, phase: 'prep' }))} className="px-12 py-5 bg-blue-600 hover:bg-blue-500 text-white font-black uppercase rounded-2xl shadow-xl transform transition-all hover:scale-105 active:scale-95 italic tracking-tighter">Enter Prep Sector</button>
              ) : (
-                <div className="flex flex-col items-center gap-4">
-                  <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl border border-slate-700 animate-pulse italic">Awaiting Synchronized Arrival...</div>
-                </div>
+                <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl border border-slate-700 animate-pulse italic">Awaiting Synchronized Arrival...</div>
              )}
              <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest transition-colors flex items-center gap-2 mt-4">
                <i className="fa-solid fa-arrow-left"></i>
