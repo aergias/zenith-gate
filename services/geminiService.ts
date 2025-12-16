@@ -1,7 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
-import { CharacterTemplate } from "../types";
+import { CharacterTemplate, Message } from "../types";
 
-// Lazy-initialize AI to ensure process.env is ready
 let aiInstance: GoogleGenAI | null = null;
 const getAI = () => {
   if (!aiInstance) {
@@ -10,14 +9,46 @@ const getAI = () => {
   return aiInstance;
 };
 
-const SYSTEM_INSTRUCTION = "You are the Zenith Core, a sentient AI presiding over the Zenith Gate: The Universal Arena. You speak to warriors from across the multiverse who warp in through singularities. Your tone is grand, slightly theatrical, and highly encouraging. Mention the cheering crowds of the multiverse or the power of the singularities.";
+const SYSTEM_INSTRUCTION = `
+You are Zenith OS, the primary gatekeeper for the Zenith Gate facility.
+Your role is to manage the arrival of seekers and coordinate the resonance between pilots in the Universal Arena.
+- Tone: Sophisticated, ancient-futuristic, slightly theatrical, but reassuring.
+- Context: You are preparing seekers for high-stakes duels in the rifts. Refer to their lobby as a "Sanctum".
+- Mention "The cheering crowds of the multiverse", "Resonance Frequency", "Gate Stability", and "Starfield Alignment".
+`;
+
+export const getAiResponse = async (userMessage: string, history: Message[]): Promise<string> => {
+  try {
+    const ai = getAI();
+    const formattedHistory = history.map(m => ({
+      role: m.senderId === 'zenith-os' ? 'model' : 'user',
+      parts: [{ text: m.text }]
+    }));
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
+        ...formattedHistory,
+        { role: 'user', parts: [{ text: userMessage }] }
+      ],
+      config: {
+        systemInstruction: SYSTEM_INSTRUCTION,
+      },
+    });
+
+    return response.text || "Synchronizing Zenith OS... link momentarily unstable.";
+  } catch (error) {
+    console.error("Zenith OS Error:", error);
+    return "The Gate is clouded. Please standby for resonance correction.";
+  }
+};
 
 export const getTacticalAdvice = async (playerChar: CharacterTemplate, enemyChar: CharacterTemplate): Promise<string> => {
   try {
     const ai = getAI();
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: `Provide a short, 2-sentence tactical tip for ${playerChar.name} (${playerChar.role}) vs ${enemyChar.name} (${enemyChar.role}) in the Zenith Arena. Focus on the crowd-pleasing potential of their abilities.`,
+      contents: `Provide a short, 2-sentence tactical tip for ${playerChar.name} vs ${enemyChar.name} in the Zenith Arena. Focus on the crowd-pleasing potential of their abilities.`,
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
       }
@@ -34,7 +65,7 @@ export const getPostMatchCommentary = async (winnerName: string, loserName: stri
     const ai = getAI();
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: `Recap the victory of ${winnerName} over ${loserName}. The crowd is going wild in the Zenith Arena. Give a 1-sentence epic summary.`,
+      contents: `Recap the victory of ${winnerName} over ${loserName}. Give a 1-sentence epic summary.`,
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
       }

@@ -1,7 +1,5 @@
-
 export type Point = { x: number; y: number };
 
-// Added ConnectionStatus type to resolve import errors
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 export enum AbilityKey {
@@ -143,6 +141,24 @@ export type Projectile = {
 export type GameMode = 'SOLO' | 'MULTIPLAYER';
 export type TurnOwner = 'Player1' | 'Player2';
 
+// Lobby specific types
+export interface Message {
+  id: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  timestamp: number;
+  isAi?: boolean;
+}
+
+export interface Player {
+  id: string;
+  name: string;
+  role: 'pilot' | 'navigator' | 'ai-host';
+  status: 'ready' | 'waiting';
+  avatar: string;
+}
+
 export type GameState = {
   player: Entity | null;
   enemy: Entity | null;
@@ -169,4 +185,6 @@ export type GameState = {
   isPaused?: boolean;
   localSelectedChar?: CharacterTemplate;
   isHost: boolean;
+  messages: Message[];
+  lobbyPlayers: Player[];
 };
