@@ -20,19 +20,16 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
   const syncTimerRef = useRef(0);
   const hudSyncTimerRef = useRef(0);
   
-  // This ref holds the "truth" of the world and is updated outside React's render cycle
+  // High-frequency simulation state
   const worldRef = useRef<GameState>(gameState);
-  
-  // Solo AI Logic Tick
   const aiTickRef = useRef(0);
 
-  // Initialize/Sync worldRef when phase or characters change
   useEffect(() => {
+    // Only update template/metadata, preserve physical properties if already in battle
     worldRef.current = {
       ...gameState,
-      // Keep existing world data if already in battle to prevent jumps
-      player: worldRef.current.player || gameState.player,
-      enemy: worldRef.current.enemy || gameState.enemy,
+      player: worldRef.current.player ? { ...worldRef.current.player, template: gameState.player?.template || worldRef.current.player.template } : gameState.player,
+      enemy: worldRef.current.enemy ? { ...worldRef.current.enemy, template: gameState.enemy?.template || worldRef.current.enemy.template } : gameState.enemy,
       projectiles: worldRef.current.projectiles.length ? worldRef.current.projectiles : gameState.projectiles,
     };
   }, [gameState.phase, gameState.player?.template.id, gameState.enemy?.template.id]);
@@ -46,7 +43,6 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
       const world = worldRef.current;
 
       if (msg.type === 'battle_input' && gameState.isHost) {
-        // Host receives input from guest (who is 'enemy' from host perspective)
         if (msg.payload.action === 'move' && world.enemy) {
           world.enemy.targetX = msg.payload.x;
           world.enemy.targetY = msg.payload.y;
@@ -54,18 +50,35 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
           castAbility('enemy', msg.payload.abilityId, msg.payload.x, msg.payload.y);
         }
       } else if (msg.type === 'battle_sync' && !gameState.isHost) {
-        // Guest receives world state from host
-        // Perspective Flip: Host's 'player' is Guest's 'enemy'
         const hostPlayer = msg.payload.entities.find(e => e.id === 'player');
         const hostEnemy = msg.payload.entities.find(e => e.id === 'enemy');
         
         if (hostPlayer && hostEnemy) {
-          world.player = { ...hostEnemy, id: 'player', isPlayer: true };
+          // Perspective Flip: Host's 'player' is Guest's 'enemy'
           world.enemy = { ...hostPlayer, id: 'enemy', isPlayer: false };
+          
+          // RECONCILIATION: For the local player, we trust the Host for HP/Mana/Stats,
+          // but we only correct position if it drifts too far to prevent "snapping".
+          if (world.player) {
+            const dist = Math.hypot(world.player.x - hostEnemy.x, world.player.y - hostEnemy.y);
+            if (dist > 100) { // Large drift - hard snap
+              world.player.x = hostEnemy.x;
+              world.player.y = hostEnemy.y;
+            } else if (dist > 5) { // Small drift - smooth pull
+              world.player.x += (hostEnemy.x - world.player.x) * 0.15;
+              world.player.y += (hostEnemy.y - world.player.y) * 0.15;
+            }
+            // Update authoritative stats from Host
+            world.player.stats = hostEnemy.stats;
+            world.player.buffs = hostEnemy.buffs;
+            world.player.attackTimer = hostEnemy.attackTimer;
+          } else {
+            world.player = { ...hostEnemy, id: 'player', isPlayer: true };
+          }
         }
+        
         world.projectiles = msg.payload.projectiles;
         world.zones = msg.payload.zones;
-        // Merge VFX to avoid flickering
         const newVfx = msg.payload.vfx.filter(v => !world.vfx.find(pv => pv.id === v.id));
         world.vfx = [...world.vfx, ...newVfx];
         world.countdown = msg.payload.countdown;
@@ -174,7 +187,6 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
     }
   };
 
-  // Physics Loop (Only for Host)
   const runPhysics = useCallback(() => {
     const now = performance.now();
     const dt = Math.min(now - lastUpdateRef.current, 50);
@@ -189,17 +201,62 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
       return;
     }
 
-    if (world.isHost) {
-      const { player, enemy, projectiles, zones, vfx, obstacles } = world;
-      if (!player || !enemy) return;
+    const { player, enemy, projectiles, zones, vfx, obstacles } = world;
+    if (!player || !enemy) return;
 
-      // VFX Cleanup
+    // LOCAL PREDICTION: Both Host and Guest simulate local player movement locally
+    // Host simulates both, Guest simulates local and relies on sync for enemy.
+    [player, enemy].forEach((ent, idx) => {
+      // If we are guest, we only simulate OUR character (player) for prediction
+      // If we are host, we simulate both
+      const isLocal = idx === 0; // 'player' is always local character in this context
+      if (!world.isHost && !isLocal) return; 
+      
+      if (ent.stats.hp <= 0) return;
+      
+      // Cooldowns and Mana (Host strictly authoritative, but local predictive for smoothness)
+      ent.stats.mana = Math.min(ent.stats.maxMana, ent.stats.mana + ent.stats.manaRegen * dtSec);
+      ent.template.abilities.forEach(a => a.currentCooldown = Math.max(0, a.currentCooldown - dt));
+      
+      let speed = ent.stats.speed;
+      for (let i = ent.buffs.length - 1; i >= 0; i--) {
+        const b = ent.buffs[i];
+        if (world.isHost) b.timer -= dt; // Host manages buff timers
+        if (b.type === StatusType.SLOW) speed *= (1 - (b.value || 0.3));
+        if (b.type === StatusType.SPEED) speed += (b.value || 0);
+        if (world.isHost && b.timer <= 0) ent.buffs.splice(i, 1);
+      }
+
+      if (!ent.buffs.some(b => b.type === StatusType.STUN)) {
+        const dx = ent.targetX - ent.x, dy = ent.targetY - ent.y, d = Math.hypot(dx, dy);
+        if (d > 5) {
+          const ang = Math.atan2(dy, dx); ent.angle = ang;
+          const vx = Math.cos(ang) * Math.min(d, speed * dtSec);
+          const vy = Math.sin(ang) * Math.min(d, speed * dtSec);
+          if (!checkWallCollision(ent.x + vx, ent.y, ent.radius, obstacles)) ent.x += vx;
+          if (!checkWallCollision(ent.x, ent.y + vy, ent.radius, obstacles)) ent.y += vy;
+          ent.state = 'moving';
+        } else { ent.state = 'idle'; }
+      }
+      
+      if (world.isHost) {
+        const other = idx === 0 ? enemy : player;
+        if (other.stats.hp > 0 && Math.hypot(other.x - ent.x, other.y - ent.y) < ent.stats.attackRange && ent.attackTimer <= 0) {
+          applyDamage(other, ent.stats.baseAttackDamage, vfx);
+          ent.attackTimer = 1000 / ent.stats.attackSpeed;
+          vfx.push({ id: Math.random().toString(), x: other.x, y: other.y, type: 'impact', color: ent.template.color, radius: 20, timer: 150, maxTimer: 150 });
+        }
+        ent.attackTimer = Math.max(0, ent.attackTimer - dt);
+      }
+    });
+
+    // WORLD SIMULATION: Only Host manages global objects
+    if (world.isHost) {
       for (let i = vfx.length - 1; i >= 0; i--) {
         vfx[i].timer -= dt;
         if (vfx[i].timer <= 0) vfx.splice(i, 1);
       }
 
-      // Zone Processing
       for (let i = zones.length - 1; i >= 0; i--) {
         const z = zones[i];
         z.timer -= dt;
@@ -213,7 +270,6 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
         }
       }
 
-      // Projectiles
       for (let i = projectiles.length - 1; i >= 0; i--) {
         const p = projectiles[i];
         p.x += p.vx * dtSec; p.y += p.vy * dtSec; p.life -= dtSec;
@@ -226,7 +282,6 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
         }
       }
 
-      // Solo AI
       if (world.gameMode === 'SOLO' && enemy.stats.hp > 0 && !enemy.buffs.some(b => b.type === StatusType.STUN)) {
         aiTickRef.current++;
         if (aiTickRef.current % 15 === 0) {
@@ -237,43 +292,7 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
         }
       }
 
-      // Entities
-      [player, enemy].forEach((ent, idx) => {
-        if (ent.stats.hp <= 0) return;
-        ent.stats.mana = Math.min(ent.stats.maxMana, ent.stats.mana + ent.stats.manaRegen * dtSec);
-        ent.template.abilities.forEach(a => a.currentCooldown = Math.max(0, a.currentCooldown - dt));
-        
-        let speed = ent.stats.speed;
-        for (let i = ent.buffs.length - 1; i >= 0; i--) {
-          const b = ent.buffs[i];
-          b.timer -= dt;
-          if (b.type === StatusType.SLOW) speed *= (1 - (b.value || 0.3));
-          if (b.type === StatusType.SPEED) speed += (b.value || 0);
-          if (b.timer <= 0) ent.buffs.splice(i, 1);
-        }
-
-        if (!ent.buffs.some(b => b.type === StatusType.STUN)) {
-          const dx = ent.targetX - ent.x, dy = ent.targetY - ent.y, d = Math.hypot(dx, dy);
-          if (d > 5) {
-            const ang = Math.atan2(dy, dx); ent.angle = ang;
-            const vx = Math.cos(ang) * Math.min(d, speed * dtSec);
-            const vy = Math.sin(ang) * Math.min(d, speed * dtSec);
-            if (!checkWallCollision(ent.x + vx, ent.y, ent.radius, obstacles)) ent.x += vx;
-            if (!checkWallCollision(ent.x, ent.y + vy, ent.radius, obstacles)) ent.y += vy;
-            ent.state = 'moving';
-          } else { ent.state = 'idle'; }
-
-          const other = idx === 0 ? enemy : player;
-          if (other.stats.hp > 0 && Math.hypot(other.x - ent.x, other.y - ent.y) < ent.stats.attackRange && ent.attackTimer <= 0) {
-            applyDamage(other, ent.stats.baseAttackDamage, vfx);
-            ent.attackTimer = 1000 / ent.stats.attackSpeed;
-            vfx.push({ id: Math.random().toString(), x: other.x, y: other.y, type: 'impact', color: ent.template.color, radius: 20, timer: 150, maxTimer: 150 });
-          }
-        }
-        ent.attackTimer = Math.max(0, ent.attackTimer - dt);
-      });
-
-      // Network Sync Heartbeat
+      // Sync Heartbeat (Increased to ~33 FPS)
       syncTimerRef.current -= dt;
       if (syncTimerRef.current <= 0 && connection?.open) {
         connection.send({
@@ -282,29 +301,26 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
             entities: [player, enemy], projectiles, zones, vfx, countdown: world.countdown
           }
         });
-        syncTimerRef.current = 40; // ~25 FPS sync
+        syncTimerRef.current = 30; 
       }
 
       if (player.stats.hp <= 0) onGameOver('enemy');
       else if (enemy.stats.hp <= 0) onGameOver('player');
     } else {
-      // Guest only processes VFX cleanup for smoothness
-      const { vfx } = world;
+      // Guest local VFX cleanup
       for (let i = vfx.length - 1; i >= 0; i--) {
         vfx[i].timer -= dt;
         if (vfx[i].timer <= 0) vfx.splice(i, 1);
       }
     }
 
-    // HUD Throttle Sync (Updates parent React state)
     hudSyncTimerRef.current -= dt;
     if (hudSyncTimerRef.current <= 0) {
       setGameState({ ...world });
-      hudSyncTimerRef.current = 100; // 10 FPS for HUD is enough
+      hudSyncTimerRef.current = 100;
     }
   }, [connection, onGameOver, setGameState]);
 
-  // Render Loop (60 FPS for both)
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
@@ -318,7 +334,7 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
     for (let x = 0; x < ARENA_WIDTH; x += 100) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ARENA_HEIGHT); ctx.stroke(); }
     for (let y = 0; y < ARENA_HEIGHT; y += 100) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(ARENA_WIDTH, y); ctx.stroke(); }
     
-    // World Elements
+    // Elements
     s.obstacles.forEach(o => { ctx.fillStyle = '#1e293b'; ctx.fillRect(o.x, o.y, o.width, o.height); });
     s.zones.forEach(z => { ctx.beginPath(); ctx.arc(z.x, z.y, z.radius, 0, Math.PI * 2); ctx.fillStyle = z.color + '22'; ctx.fill(); ctx.strokeStyle = z.color; ctx.stroke(); });
     s.projectiles.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2); ctx.fillStyle = p.color; ctx.fill(); });
@@ -331,7 +347,6 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
       ctx.beginPath(); ctx.moveTo(ent.radius, 0); ctx.lineTo(ent.radius + 15, 0); ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.stroke();
       ctx.restore();
       
-      // Local HP Bar
       ctx.fillStyle = '#0f172a'; ctx.fillRect(ent.x - 25, ent.y - 45, 50, 6);
       ctx.fillStyle = ent.template.color; ctx.fillRect(ent.x - 25, ent.y - 45, 50 * (ent.stats.hp / ent.stats.maxHp), 6);
     });
@@ -348,17 +363,12 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
 
   useEffect(() => {
     renderRef.current = requestAnimationFrame(draw);
-    if (gameState.isHost) {
-      physicsRef.current = window.setInterval(runPhysics, 33);
-    } else {
-      // Guest still runs "runPhysics" for VFX cleanup and HUD syncing
-      physicsRef.current = window.setInterval(runPhysics, 33);
-    }
+    physicsRef.current = window.setInterval(runPhysics, 16); // ~60fps physics
     return () => {
       cancelAnimationFrame(renderRef.current);
       clearInterval(physicsRef.current);
     };
-  }, [draw, runPhysics, gameState.isHost]);
+  }, [draw, runPhysics]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -370,12 +380,14 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
       const x = (e.clientX - rect.left) * (ARENA_WIDTH / rect.width);
       const y = (e.clientY - rect.top) * (ARENA_HEIGHT / rect.height);
       
-      if (gameState.isHost) {
-        if (worldRef.current.player) {
-          worldRef.current.player.targetX = x;
-          worldRef.current.player.targetY = y;
-        }
-      } else if (connection?.open) {
+      const world = worldRef.current;
+      if (world.player) {
+        // CLIENT PREDICTION: Apply movement locally immediately
+        world.player.targetX = x;
+        world.player.targetY = y;
+      }
+      
+      if (!gameState.isHost && connection?.open) {
         connection.send({ type: 'battle_input', payload: { action: 'move', x, y } });
       }
     };
@@ -387,6 +399,7 @@ const GameCanvas: React.FC<Props> = ({ gameState, setGameState, onGameOver, conn
         if (gameState.isHost) {
           castAbility('player', abilityId, mousePosRef.current.x, mousePosRef.current.y);
         } else if (connection?.open) {
+          // Note: Guest only predicts MOVEMENT, not combat to prevent desync on health/effects
           connection.send({ type: 'battle_input', payload: { action: 'cast', x: mousePosRef.current.x, y: mousePosRef.current.y, abilityId } });
         }
       }
