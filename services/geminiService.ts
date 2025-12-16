@@ -4,7 +4,8 @@ import { CharacterTemplate, Message } from "../types";
 let aiInstance: GoogleGenAI | null = null;
 const getAI = () => {
   if (!aiInstance) {
-    aiInstance = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // The API key must be obtained exclusively from the environment variable process.env.API_KEY.
+    aiInstance = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
   }
   return aiInstance;
 };
