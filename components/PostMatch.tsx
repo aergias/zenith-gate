@@ -56,7 +56,7 @@ const PostMatch: React.FC<Props> = ({ winner, player, enemy, onRestart, localNam
           className="mt-8 px-12 py-4 bg-slate-800 hover:bg-slate-700 text-white text-xl font-black uppercase italic tracking-tighter rounded-full transition-all transform hover:scale-105 shadow-2xl border-2"
           style={{ borderColor: isWinner ? player.template.color : '#475569' }}
         >
-          Return to Arena
+          Return to Sanctum
         </button>
       </div>
     </div>

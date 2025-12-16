@@ -132,7 +132,6 @@ const App: React.FC = () => {
   const setupConnection = (conn: DataConnection, isHostSide: boolean) => {
     conn.on('open', () => {
       setConnStatus('connected');
-      // Send initial profile
       conn.send({ type: 'peer_info', payload: { ...localUserRef.current } });
     });
 
@@ -150,7 +149,6 @@ const App: React.FC = () => {
               lobbyPlayers: [os, { ...localUserRef.current }, peerPlayer, ...otherPlayers]
             };
           });
-          // Host replies to guest with their info to complete handshake
           if (isHostSide) {
             conn.send({ type: 'peer_info', payload: { ...localUserRef.current } });
           }
@@ -302,8 +300,41 @@ const App: React.FC = () => {
 
   const goBackToSelection = () => {
     if (peerRef.current) peerRef.current.destroy();
-    setGameState(prev => ({ ...prev, phase: 'selection', matchId: undefined, lobbyPlayers: [], messages: [], localReady: false, remoteReady: false }));
+    setGameState(prev => ({ ...prev, phase: 'selection', matchId: undefined, lobbyPlayers: [], messages: [], localReady: false, remoteReady: false, localSelectedChar: undefined, remoteSelectedChar: undefined }));
     soundService.playUI();
+  };
+
+  const handleRestart = () => {
+    localUserRef.current.status = 'waiting';
+    if (gameState.gameMode === 'MULTIPLAYER') {
+      if (gameState.isHost && connectionRef.current?.open) {
+        connectionRef.current.send({ type: 'phase_change', payload: 'lobby' });
+      }
+      setGameState(prev => ({ 
+        ...prev, 
+        phase: 'lobby', 
+        player: null, 
+        enemy: null, 
+        winner: null,
+        localReady: false,
+        remoteReady: false,
+        localSelectedChar: undefined,
+        remoteSelectedChar: undefined,
+        lobbyPlayers: prev.lobbyPlayers.map(p => p.id === localUserRef.current.id ? { ...localUserRef.current } : p)
+      }));
+      // If we are guest, we just set our local phase to lobby and wait for sync or for host to also click restart
+      // Usually host controls phase change, but it's safe if both can click it
+    } else {
+      setGameState(prev => ({ 
+        ...prev, 
+        phase: 'selection', 
+        player: null, 
+        enemy: null, 
+        winner: null,
+        localSelectedChar: undefined,
+        remoteSelectedChar: undefined 
+      }));
+    }
   };
 
   return (
@@ -423,7 +454,7 @@ const App: React.FC = () => {
       )}
 
       {gameState.phase === 'results' && gameState.player && gameState.enemy && (
-        <PostMatch winner={gameState.winner!} player={gameState.player} enemy={gameState.enemy} onRestart={() => setGameState(prev => ({ ...prev, phase: 'selection', player: null, enemy: null }))} localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
+        <PostMatch winner={gameState.winner!} player={gameState.player} enemy={gameState.enemy} onRestart={handleRestart} localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
       )}
     </div>
   );
