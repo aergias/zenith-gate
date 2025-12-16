@@ -44,10 +44,15 @@ const App: React.FC = () => {
 
   const syncUpdateRef = useRef<(type: string, data: any) => void>(() => {});
   const localUsernameRef = useRef(gameState.localUsername);
+  const localCharRef = useRef(gameState.localSelectedChar);
 
   useEffect(() => {
     localUsernameRef.current = gameState.localUsername;
   }, [gameState.localUsername]);
+
+  useEffect(() => {
+    localCharRef.current = gameState.localSelectedChar;
+  }, [gameState.localSelectedChar]);
 
   const handleStartGame = useCallback((mode: GameMode, overrideId?: string) => {
     const id = (overrideId || matchInput).trim().toUpperCase();
@@ -64,7 +69,9 @@ const App: React.FC = () => {
         matchId: id, 
         phase: 'lobby', 
         isHost: true,
-        remoteUsername: undefined 
+        remoteUsername: undefined,
+        remoteReady: false,
+        localReady: false
       }));
       if (window.location.hash !== `#matchId=${id}`) {
         window.location.hash = `matchId=${id}`;
@@ -77,7 +84,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (gameState.phase === 'lobby' && (connStatus === 'connecting' || connStatus === 'disconnected' || connStatus === 'error')) {
-      const timer = setTimeout(() => setSearchTimeout(true), 4000);
+      const timer = setTimeout(() => setSearchTimeout(true), 10000);
       return () => clearTimeout(timer);
     }
   }, [gameState.phase, connStatus]);
@@ -118,6 +125,7 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [gameState.phase]);
 
+  // Handle incoming sync messages
   useEffect(() => {
     syncUpdateRef.current = (type: string, data: any) => {
       switch (type) {
@@ -127,6 +135,7 @@ const App: React.FC = () => {
             remoteUsername: data.username, 
             isHost: syncService.getClientId() < data.clientId 
           }));
+          // Immediate handshake reply
           syncService.send('DISCOVERY_REPLY', { 
             username: localUsernameRef.current, 
             clientId: syncService.getClientId() 
@@ -147,12 +156,13 @@ const App: React.FC = () => {
           setGameState(prev => ({ ...prev, remoteReady: data.isReady }));
           break;
         case 'START_GAME':
-          if (gameState.localSelectedChar) initiateBattle(gameState.localSelectedChar);
+          if (localCharRef.current) initiateBattle(localCharRef.current);
           break;
       }
     };
-  }, [gameState.localSelectedChar]);
+  });
 
+  // Multi-Peer Lifecycle Management
   useEffect(() => {
     if (gameState.matchId && (gameState.phase === 'lobby' || gameState.phase === 'prep')) {
       syncService.subscribe(
@@ -161,6 +171,7 @@ const App: React.FC = () => {
         (status) => setConnStatus(status)
       );
 
+      // Recursive discovery broadcast
       const interval = window.setInterval(() => {
         if (syncService.getStatus() === 'connected' && !gameState.remoteUsername) {
           syncService.send('DISCOVERY', { 
@@ -168,11 +179,11 @@ const App: React.FC = () => {
             clientId: syncService.getClientId() 
           });
         }
-      }, 2000);
+      }, 1500);
 
       return () => clearInterval(interval);
     }
-  }, [gameState.matchId, gameState.phase, gameState.remoteUsername]);
+  }, [gameState.matchId, gameState.phase]);
 
   const generateAndStartHost = useCallback(() => {
     const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -344,12 +355,10 @@ const App: React.FC = () => {
                       {connStatus === 'error' ? 'Rift Signal Terminated' : 'Protocol Synchronization Throttled'}
                     </p>
                     <div className="flex gap-4">
-                      {connStatus !== 'error' && (
-                        <button onClick={handleRecalibrate} className="px-8 py-4 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-full hover:bg-slate-700 transition-all shadow-lg flex items-center gap-2">
-                          <i className="fa-solid fa-rotate-right"></i>
-                          Recalibrate
-                        </button>
-                      )}
+                      <button onClick={handleRecalibrate} className="px-8 py-4 bg-slate-800 border border-slate-700 text-white text-[10px] font-black uppercase rounded-full hover:bg-slate-700 transition-all shadow-lg flex items-center gap-2">
+                        <i className="fa-solid fa-rotate-right"></i>
+                        Recalibrate
+                      </button>
                       <button onClick={handleSoloWarp} className="px-8 py-4 bg-blue-600 border border-blue-500 text-white text-[10px] font-black uppercase rounded-full hover:bg-blue-500 transition-all shadow-[0_0_25px_rgba(37,99,235,0.4)] flex items-center gap-2">
                         <i className="fa-solid fa-bolt"></i>
                         Force Solo Warp
@@ -366,15 +375,27 @@ const App: React.FC = () => {
                 )}
              </div>
              <div className="flex items-center gap-12 w-full justify-center">
-                <div className="text-center"><div className="w-24 h-24 bg-blue-600/20 border-2 border-blue-500 rounded-full flex items-center justify-center text-4xl text-blue-400 shadow-lg"><i className="fa-solid fa-user"></i></div><span className="text-white font-black uppercase text-sm mt-4 block">{gameState.localUsername}</span></div>
-                <div className="text-slate-600 text-3xl animate-pulse"><i className="fa-solid fa-circle-nodes"></i></div>
-                <div className="text-center"><div className={`w-24 h-24 rounded-full border-2 flex items-center justify-center text-4xl transition-all duration-700 ${gameState.remoteUsername ? 'bg-purple-600/20 border-purple-500 text-purple-400 scale-110 shadow-purple-500/20' : 'bg-slate-800 border-slate-700 text-slate-600 border-dashed animate-pulse'}`}><i className={`fa-solid ${gameState.remoteUsername ? 'fa-user-check' : 'fa-user-plus'}`}></i></div><span className="text-white font-black uppercase text-sm mt-4 block tracking-tighter">{gameState.remoteUsername || 'Seeking Rival...'}</span></div>
+                <div className="text-center">
+                  <div className="w-24 h-24 bg-blue-600/20 border-2 border-blue-500 rounded-full flex items-center justify-center text-4xl text-blue-400 shadow-lg">
+                    <i className="fa-solid fa-user"></i>
+                  </div>
+                  <span className="text-white font-black uppercase text-sm mt-4 block">{gameState.localUsername}</span>
+                </div>
+                <div className="text-slate-600 text-3xl animate-pulse">
+                  <i className="fa-solid fa-circle-nodes"></i>
+                </div>
+                <div className="text-center">
+                  <div className={`w-24 h-24 rounded-full border-2 flex items-center justify-center text-4xl transition-all duration-700 ${gameState.remoteUsername ? 'bg-purple-600/20 border-purple-500 text-purple-400 scale-110 shadow-purple-500/20' : 'bg-slate-800 border-slate-700 text-slate-600 border-dashed animate-pulse'}`}>
+                    <i className={`fa-solid ${gameState.remoteUsername ? 'fa-user-check' : 'fa-user-plus'}`}></i>
+                  </div>
+                  <span className="text-white font-black uppercase text-sm mt-4 block tracking-tighter">{gameState.remoteUsername || 'Seeking Rival...'}</span>
+                </div>
              </div>
              {gameState.remoteUsername ? (
                <button onClick={() => setGameState(prev => ({ ...prev, phase: 'prep' }))} className="px-12 py-5 bg-blue-600 hover:bg-blue-500 text-white font-black uppercase rounded-2xl shadow-xl transform transition-all hover:scale-105 active:scale-95 italic tracking-tighter">Initialize Prep Sector</button>
              ) : (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl border border-slate-700 animate-pulse">Waiting for Rival Response...</div>
+                  <div className="px-12 py-5 bg-slate-800/50 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl border border-slate-700 animate-pulse italic">Awaiting Synchronized Arrival...</div>
                 </div>
              )}
              <button onClick={handleQuit} className="text-slate-500 hover:text-white font-bold uppercase text-[10px] tracking-widest transition-colors flex items-center gap-2 mt-4">
@@ -394,6 +415,18 @@ const App: React.FC = () => {
               setGameState(prev => ({ ...prev, localSelectedChar: c }));
             }} isWarping={isWarping} selectedId={gameState.localSelectedChar?.id} remoteId={gameState.remoteSelectedChar?.id} />
             <div className="flex flex-col gap-6">
+              
+              {/* Rival Ready Indicator */}
+              {gameState.gameMode === 'MULTIPLAYER' && (
+                <div className="bg-slate-900 border border-slate-700 p-4 rounded-2xl flex items-center justify-between">
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Rival Status</span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] font-black uppercase ${gameState.remoteReady ? 'text-green-400' : 'text-slate-500'}`}>{gameState.remoteReady ? 'READY' : 'PREPPING'}</span>
+                    <div className={`w-3 h-3 rounded-full ${gameState.remoteReady ? 'bg-green-500 animate-pulse' : 'bg-slate-800'}`} style={{ backgroundColor: gameState.remoteReady ? gameState.remoteSelectedChar?.color : undefined }}></div>
+                  </div>
+                </div>
+              )}
+
               <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl space-y-4">
                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Arena Sector</span>
                  <div className="flex flex-col gap-2">
@@ -407,10 +440,12 @@ const App: React.FC = () => {
                     ))}
                  </div>
               </div>
+
               <button 
                 onClick={toggleReady} 
                 disabled={!gameState.localSelectedChar || isWarping || isLockingIn} 
                 className={`w-full py-6 rounded-3xl font-black uppercase italic text-xl transition-all transform active:scale-95 flex items-center justify-center gap-4 ${isLockingIn ? 'bg-white text-blue-600 scale-95' : gameState.localReady ? 'bg-green-600 shadow-[0_0_30px_rgba(22,163,74,0.6)] animate-pulse' : 'bg-blue-600 hover:bg-blue-500 shadow-xl'} text-white disabled:opacity-50`}
+                style={{ backgroundColor: (gameState.localReady && !isLockingIn) ? gameState.localSelectedChar?.color : undefined }}
               >
                 {isLockingIn ? (
                    <i className="fa-solid fa-circle-notch animate-spin"></i>
