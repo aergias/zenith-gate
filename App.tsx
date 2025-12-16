@@ -79,18 +79,25 @@ const App: React.FC = () => {
     const hostId = `zenith-gate-${matchId.toLowerCase().trim()}`;
     if (peerRef.current) peerRef.current.destroy();
 
+    const osPlayer: Player = { 
+      id: 'zenith-os', 
+      name: 'ZENITH OS', 
+      role: 'ai-host', 
+      status: 'ready', 
+      avatar: 'https://images.unsplash.com/photo-1614728263952-84ea256f9679?auto=format&fit=crop&q=80&w=100&h=100' 
+    };
+
     if (!isJoining) {
       const peer = new Peer(hostId);
       peerRef.current = peer;
       peer.on('open', () => {
-        setGameState(prev => ({ ...prev, isHost: true }));
-        setConnStatus('connected');
-        const os: Player = { id: 'zenith-os', name: 'ZENITH OS', role: 'ai-host', status: 'ready', avatar: 'https://images.unsplash.com/photo-1614728263952-84ea256f9679?auto=format&fit=crop&q=80&w=100&h=100' };
         setGameState(prev => ({ 
           ...prev, 
-          lobbyPlayers: [os, { ...localUserRef.current }],
-          messages: [{ id: 'init', senderId: 'zenith-os', senderName: 'ZENITH OS', text: `Rift ${matchId} stabilized. Awaiting second resonance signature.`, timestamp: Date.now(), isAi: true }]
+          isHost: true,
+          lobbyPlayers: [osPlayer, { ...localUserRef.current }]
         }));
+        setConnStatus('connected');
+        
         peer.on('connection', (conn) => {
           connectionRef.current = conn;
           setupConnection(conn, true);
@@ -98,7 +105,7 @@ const App: React.FC = () => {
       });
       peer.on('error', (err) => {
         if (err.type === 'unavailable-id') {
-          alert("Key active. Use different ID or Join.");
+          alert("This Singularity Key is already active.");
           setGameState(prev => ({ ...prev, phase: 'selection' }));
         }
       });
@@ -108,11 +115,15 @@ const App: React.FC = () => {
       guestPeer.on('open', () => {
         const conn = guestPeer.connect(hostId);
         connectionRef.current = conn;
-        setGameState(prev => ({ ...prev, isHost: false }));
+        setGameState(prev => ({ 
+          ...prev, 
+          isHost: false,
+          lobbyPlayers: [osPlayer, { ...localUserRef.current }] 
+        }));
         setupConnection(conn, false);
       });
-      guestPeer.on('error', (err) => {
-        alert("Rift connection failed.");
+      guestPeer.on('error', () => {
+        alert("Failed to connect to rift.");
         setGameState(prev => ({ ...prev, phase: 'selection' }));
       });
     }
@@ -121,6 +132,7 @@ const App: React.FC = () => {
   const setupConnection = (conn: DataConnection, isHostSide: boolean) => {
     conn.on('open', () => {
       setConnStatus('connected');
+      // Send initial profile
       conn.send({ type: 'peer_info', payload: { ...localUserRef.current } });
     });
 
@@ -129,19 +141,25 @@ const App: React.FC = () => {
       switch (msg.type) {
         case 'peer_info':
           const peerPlayer = msg.payload;
-          setGameState(prev => ({
-            ...prev,
-            remoteUsername: peerPlayer.name,
-            lobbyPlayers: [...prev.lobbyPlayers.filter(p => p.id !== peerPlayer.id && p.id !== 'zenith-os'), 
-              { id: 'zenith-os', name: 'ZENITH OS', role: 'ai-host', status: 'ready', avatar: 'https://images.unsplash.com/photo-1614728263952-84ea256f9679?auto=format&fit=crop&q=80&w=100&h=100' },
-              peerPlayer
-            ]
-          }));
-          if (isHostSide) conn.send({ type: 'peer_info', payload: { ...localUserRef.current } });
+          setGameState(prev => {
+            const otherPlayers = prev.lobbyPlayers.filter(p => p.id !== peerPlayer.id && p.id !== localUserRef.current.id && p.id !== 'zenith-os');
+            const os = prev.lobbyPlayers.find(p => p.id === 'zenith-os') || { id: 'zenith-os', name: 'ZENITH OS', role: 'ai-host' as any, status: 'ready' as any, avatar: '' };
+            return {
+              ...prev,
+              remoteUsername: peerPlayer.name,
+              lobbyPlayers: [os, { ...localUserRef.current }, peerPlayer, ...otherPlayers]
+            };
+          });
+          // Host replies to guest with their info to complete handshake
+          if (isHostSide) {
+            conn.send({ type: 'peer_info', payload: { ...localUserRef.current } });
+          }
           break;
+
         case 'chat':
           setGameState(prev => ({ ...prev, messages: [...prev.messages, msg.payload] }));
           break;
+
         case 'player_update':
           const updated = msg.payload;
           setGameState(prev => ({
@@ -150,29 +168,43 @@ const App: React.FC = () => {
             lobbyPlayers: prev.lobbyPlayers.map(p => p.id === updated.id ? updated : p)
           }));
           break;
+
+        case 'phase_change':
+          setGameState(prev => ({ ...prev, phase: msg.payload }));
+          break;
+
         case 'char_selected':
           setGameState(prev => ({ ...prev, remoteSelectedChar: msg.payload }));
           break;
+
         case 'battle_init':
           receiveBattleInit(msg.payload.playerChar, msg.payload.enemyChar, msg.payload.arenaId);
           break;
+
         case 'battle_sync':
           if (!gameStateRef.current.isHost) {
             setGameState(prev => ({
               ...prev,
-              player: msg.payload.entities.find(e => e.id === 'enemy') || prev.player, // Note: ID perspective flip
+              player: msg.payload.entities.find(e => e.id === 'enemy') || prev.player,
               enemy: msg.payload.entities.find(e => e.id === 'player') || prev.enemy,
               projectiles: msg.payload.projectiles,
               zones: msg.payload.zones,
-              vfx: msg.payload.vfx,
+              vfx: [...prev.vfx, ...msg.payload.vfx.filter(v => !prev.vfx.find(pv => pv.id === v.id))],
               countdown: msg.payload.countdown
             }));
           }
           break;
+
         case 'battle_over':
           setGameState(prev => ({ ...prev, phase: 'results', winner: msg.payload === 'player' ? 'enemy' : 'player' }));
           break;
       }
+    });
+
+    conn.on('close', () => {
+      setConnStatus('disconnected');
+      alert("Peer disconnected.");
+      setGameState(prev => ({ ...prev, phase: 'selection', matchId: undefined }));
     });
   };
 
@@ -188,6 +220,13 @@ const App: React.FC = () => {
     setGameState(prev => ({ ...prev, gameMode: 'MULTIPLAYER', matchId: id, phase: 'lobby', isHost: action === 'CREATE' }));
     setupPeer(id, action === 'JOIN');
   }, [matchInput]);
+
+  const handleOpenPrep = () => {
+    if (gameState.isHost && connectionRef.current?.open) {
+      connectionRef.current.send({ type: 'phase_change', payload: 'prep' });
+    }
+    setGameState(prev => ({ ...prev, phase: 'prep' }));
+  };
 
   const handleCharSelected = (char: CharacterTemplate) => {
     setGameState(prev => ({ ...prev, localSelectedChar: char }));
@@ -228,7 +267,7 @@ const App: React.FC = () => {
       connectionRef.current.send({ 
         type: 'battle_init', 
         payload: { 
-          playerChar: enemyChar, // For the peer, the host's character is their enemy
+          playerChar: enemyChar,
           enemyChar: playerChar, 
           arenaId: gameState.selectedArenaId 
         } 
@@ -319,7 +358,7 @@ const App: React.FC = () => {
               </div>
             </div>
             {gameState.localReady && (gameState.remoteReady || gameState.gameMode === 'SOLO') && gameState.isHost && (
-              <button onClick={() => setGameState(prev => ({ ...prev, phase: 'prep' }))} className="w-full py-6 bg-[#d4af37] text-black font-orbitron font-black uppercase tracking-widest rounded-3xl animate-pulse shadow-[0_0_30px_rgba(212,175,55,0.3)]">Open Prep Sector</button>
+              <button onClick={handleOpenPrep} className="w-full py-6 bg-[#d4af37] text-black font-orbitron font-black uppercase tracking-widest rounded-3xl animate-pulse shadow-[0_0_30px_rgba(212,175,55,0.3)]">Open Prep Sector</button>
             )}
             {gameState.localReady && !gameState.isHost && (
               <div className="w-full py-6 glass rounded-3xl text-center font-orbitron text-[10px] text-[#d4af37]/60 tracking-widest uppercase italic">Awaiting Host Selection...</div>
@@ -358,8 +397,10 @@ const App: React.FC = () => {
                     ))}
                  </div>
               </div>
-              {gameState.isHost && (
-                <button onClick={() => gameState.localSelectedChar && initiateBattle(gameState.localSelectedChar)} disabled={!gameState.localSelectedChar || isWarping} className={`w-full py-6 rounded-3xl font-orbitron font-bold uppercase italic text-xl transition-all bg-[#d4af37] text-black shadow-2xl`}>Warp to Arena</button>
+              {gameState.isHost ? (
+                <button onClick={() => gameState.localSelectedChar && initiateBattle(gameState.localSelectedChar)} disabled={!gameState.localSelectedChar || isWarping} className={`w-full py-6 rounded-3xl font-orbitron font-bold uppercase italic text-xl transition-all bg-[#d4af37] text-black shadow-2xl disabled:opacity-50`}>Warp to Arena</button>
+              ) : (
+                <div className="w-full py-6 glass rounded-3xl text-center font-orbitron text-[10px] text-[#d4af37]/60 tracking-widest uppercase italic">Awaiting Host Warp...</div>
               )}
             </div>
           </div>
@@ -371,8 +412,10 @@ const App: React.FC = () => {
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} matchId={gameState.matchId} mode="header" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />
           <main className="relative game-canvas-container flex items-center justify-center min-h-0">
              <GameCanvas gameState={gameState} setGameState={setGameState} onGameOver={(w) => {
-               setGameState(prev => ({ ...prev, phase: 'results', winner: w }));
-               if (connectionRef.current?.open && gameState.isHost) connectionRef.current.send({ type: 'battle_over', payload: w });
+               if (gameState.isHost) {
+                 setGameState(prev => ({ ...prev, phase: 'results', winner: w }));
+                 if (connectionRef.current?.open) connectionRef.current.send({ type: 'battle_over', payload: w });
+               }
              }} connection={connectionRef.current} />
           </main>
           <HUD player={gameState.player} enemy={gameState.enemy} isPaused={!!gameState.isPaused} tacticalAdvice={gameState.tacticalAdvice} mode="footer" localName={gameState.localUsername} remoteName={gameState.remoteUsername} />

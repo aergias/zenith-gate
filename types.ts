@@ -164,6 +164,7 @@ export type NetworkMessage =
   | { type: 'player_update', payload: Player }
   | { type: 'ai_response', payload: Message }
   | { type: 'char_selected', payload: CharacterTemplate }
+  | { type: 'phase_change', payload: GameState['phase'] }
   | { type: 'battle_init', payload: { playerChar: CharacterTemplate, enemyChar: CharacterTemplate, arenaId: string } }
   | { type: 'battle_sync', payload: { entities: Entity[], projectiles: Projectile[], zones: Zone[], vfx: VFX[], countdown: number } }
   | { type: 'battle_input', payload: { action: 'move' | 'cast', x: number, y: number, abilityId?: AbilityKey } }
